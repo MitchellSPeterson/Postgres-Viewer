@@ -43,6 +43,7 @@ export type BrowseTable = {
   schema: string;
   name: string;
   columns: BrowseColumn[];
+  primaryKey: string[];
   rows: Record<string, unknown>[];
   rowCount: number;
   totalRows: number;
@@ -119,6 +120,19 @@ export async function browseTables(
     ...config,
     ...(limit !== undefined ? { limit } : {}),
   });
+}
+
+export async function updateTableCell(
+  config: ConnectionConfig,
+  args: {
+    schema: string;
+    table: string;
+    column: string;
+    value: unknown;
+    primaryKey: Record<string, unknown>;
+  },
+): Promise<{ ok: true; changes: number } | ApiError> {
+  return postJson("/api/update-cell", { ...config, ...args });
 }
 
 export async function listConnections(): Promise<

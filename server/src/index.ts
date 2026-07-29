@@ -3,6 +3,7 @@ import {
   formatError,
   runTargetQuery,
   testTarget,
+  updateCell,
 } from "./engines";
 import {
   connectionLabel,
@@ -195,6 +196,57 @@ Bun.serve({
         return json({ ok: true, ...result });
       } catch (err) {
         return json({ ok: false, error: formatError(err, "Browse failed") }, 400);
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/update-cell") {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ ok: false, error: "Invalid JSON body" }, 400);
+      }
+      if (!body || typeof body !== "object") {
+        return json({ ok: false, error: "Invalid request body" }, 400);
+      }
+
+      const {
+        schema,
+        table,
+        column,
+        value,
+        primaryKey,
+        ...rest
+      } = body as Record<string, unknown>;
+
+      if (typeof schema !== "string" || typeof table !== "string" || typeof column !== "string") {
+        return json({ ok: false, error: "schema, table, and column are required" }, 400);
+      }
+      if (
+        !primaryKey ||
+        typeof primaryKey !== "object" ||
+        Array.isArray(primaryKey) ||
+        Object.keys(primaryKey).length === 0
+      ) {
+        return json({ ok: false, error: "primaryKey object is required" }, 400);
+      }
+
+      const config = extractConfig(rest);
+      if (!config) {
+        return json({ ok: false, error: "Missing or invalid connection fields" }, 400);
+      }
+
+      try {
+        const result = await updateCell(config, {
+          schema,
+          table,
+          column,
+          value,
+          primaryKey: primaryKey as Record<string, unknown>,
+        });
+        return json({ ok: true, ...result });
+      } catch (err) {
+        return json({ ok: false, error: formatError(err, "Update failed") }, 400);
       }
     }
 

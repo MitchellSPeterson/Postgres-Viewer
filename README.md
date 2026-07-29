@@ -37,7 +37,7 @@ bun run dev:client   # http://localhost:5173
 ## Features
 
 - Query editor with Cmd/Ctrl+Enter
-- Browse Tables view (collapse tables / hide columns)
+- Browse Tables view (collapse tables / hide columns; double-click cells to edit when a primary key exists)
 - Save and reopen past connections (including passwords for local convenience)
 - Inspect SQLite `.db` / `.sqlite` files via bun:sqlite
 
@@ -48,6 +48,7 @@ bun run dev:client   # http://localhost:5173
 | `/api/test-connection` | POST | connection config (`engine: "postgres" \| "sqlite"`) |
 | `/api/query` | POST | connection config + `{ sql }` |
 | `/api/browse` | POST | connection config + optional `{ limit }` |
+| `/api/update-cell` | POST | connection config + `{ schema, table, column, value, primaryKey }` |
 | `/api/connections` | GET | list saved connections |
 | `/api/connections` | POST | `{ name, ...config }` |
 | `/api/connections/:id` | DELETE | delete saved connection |

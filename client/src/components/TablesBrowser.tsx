@@ -1,17 +1,25 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
   Columns3,
   Loader2,
+  PencilLine,
   RefreshCw,
   Rows3,
   Table2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CellValue, formatCellTitle } from "@/components/CellValue";
-import { browseTables, connectionKey, type BrowseTable, type ConnectionConfig } from "@/lib/api";
+import {
+  browseTables,
+  connectionKey,
+  updateTableCell,
+  type BrowseColumn,
+  type BrowseTable,
+  type ConnectionConfig,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -27,12 +35,14 @@ export function TablesBrowser({ config, active }: Props) {
   const [limit, setLimit] = useState<number | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [hiddenColumns, setHiddenColumns] = useState<Record<string, Set<string>>>({});
+  const [editError, setEditError] = useState<string | null>(null);
 
   const key = connectionKey(config);
 
   const load = async () => {
     setLoading(true);
     setError(null);
+    setEditError(null);
     try {
       const res = await browseTables(config);
       if (!res.ok) {
@@ -47,7 +57,6 @@ export function TablesBrowser({ config, active }: Props) {
       setDurationMs(res.durationMs);
       setLimit(res.limit);
 
-      // Expand all tables by default so data is visible "all at once"
       const nextExpanded: Record<string, boolean> = {};
       for (const table of res.tables) {
         nextExpanded[tableKey(table)] = true;
@@ -67,7 +76,6 @@ export function TablesBrowser({ config, active }: Props) {
   useEffect(() => {
     if (!active) return;
     void load();
-    // Reload whenever browse opens or connection identity changes
   }, [active, key]);
 
   const allExpanded =
@@ -81,13 +89,59 @@ export function TablesBrowser({ config, active }: Props) {
     setExpanded(next);
   };
 
+  const handleCellSave = async (args: {
+    table: BrowseTable;
+    rowIndex: number;
+    column: BrowseColumn;
+    raw: string;
+  }) => {
+    const { table, rowIndex, column, raw } = args;
+    if (table.primaryKey.length === 0) {
+      throw new Error("This table has no primary key, so cells are read-only");
+    }
+
+    const row = table.rows[rowIndex];
+    if (!row) throw new Error("Row not found");
+
+    const nextValue = parseEditedValue(raw, column);
+    const current = row[column.name];
+    if (valuesEqual(current, nextValue)) return;
+
+    const primaryKey: Record<string, unknown> = {};
+    for (const pk of table.primaryKey) {
+      primaryKey[pk] = row[pk] ?? null;
+    }
+
+    const res = await updateTableCell(config, {
+      schema: table.schema,
+      table: table.name,
+      column: column.name,
+      value: nextValue,
+      primaryKey,
+    });
+    if (!res.ok) throw new Error(res.error);
+
+    setTables((prev) =>
+      prev.map((t) => {
+        if (tableKey(t) !== tableKey(table)) return t;
+        return {
+          ...t,
+          rows: t.rows.map((r, i) =>
+            i === rowIndex ? { ...r, [column.name]: nextValue } : r,
+          ),
+        };
+      }),
+    );
+    setEditError(null);
+  };
+
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-panel/50">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2">
         <div>
           <h2 className="text-sm font-semibold text-ink">Tables</h2>
           <p className="text-xs text-muted">
-            Browse all tables and rows. Collapse tables or hide columns as needed.
+            Browse and edit cells. Double-click a value to change it (tables need a primary key).
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -118,14 +172,14 @@ export function TablesBrowser({ config, active }: Props) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {error && (
+        {(error || editError) && (
           <div
             className="mb-4 flex gap-2 rounded-md border border-danger/25 bg-danger-bg px-3 py-2.5 text-sm text-danger"
             role="alert"
           >
             <AlertTriangle className="mt-0.5 size-4 shrink-0" />
             <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed">
-              {error}
+              {error || editError}
             </pre>
           </div>
         )}
@@ -143,21 +197,22 @@ export function TablesBrowser({ config, active }: Props) {
 
         <div className="space-y-3">
           {tables.map((table) => {
-            const key = tableKey(table);
-            const isOpen = Boolean(expanded[key]);
-            const hidden = hiddenColumns[key] ?? new Set<string>();
+            const tKey = tableKey(table);
+            const isOpen = Boolean(expanded[tKey]);
+            const hidden = hiddenColumns[tKey] ?? new Set<string>();
             const visibleColumns = table.columns.filter((c) => !hidden.has(c.name));
+            const editable = table.primaryKey.length > 0;
 
             return (
               <article
-                key={key}
+                key={tKey}
                 className="overflow-hidden rounded-md border border-line bg-panel"
               >
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-surface/70"
                   onClick={() =>
-                    setExpanded((prev) => ({ ...prev, [key]: !prev[key] }))
+                    setExpanded((prev) => ({ ...prev, [tKey]: !prev[tKey] }))
                   }
                   aria-expanded={isOpen}
                 >
@@ -170,6 +225,16 @@ export function TablesBrowser({ config, active }: Props) {
                   <span className="font-mono text-sm font-medium text-ink">
                     {table.schema}.{table.name}
                   </span>
+                  {editable ? (
+                    <span className="inline-flex items-center gap-1 rounded bg-success-bg px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-success">
+                      <PencilLine className="size-3" />
+                      Editable
+                    </span>
+                  ) : (
+                    <span className="rounded bg-line/70 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted">
+                      Read-only
+                    </span>
+                  )}
                   <span className="ml-auto inline-flex items-center gap-3 text-xs text-muted">
                     <span className="inline-flex items-center gap-1">
                       <Columns3 className="size-3.5" />
@@ -186,14 +251,20 @@ export function TablesBrowser({ config, active }: Props) {
 
                 {isOpen && (
                   <div className="border-t border-line px-3 py-3">
+                    {!editable && (
+                      <p className="mb-2 text-xs text-muted">
+                        No primary key — cells can’t be edited safely.
+                      </p>
+                    )}
                     <div className="mb-3 flex flex-wrap gap-1.5">
                       {table.columns.map((col) => {
                         const isHidden = hidden.has(col.name);
+                        const isPk = table.primaryKey.includes(col.name);
                         return (
                           <button
                             key={col.name}
                             type="button"
-                            title={`${col.dataType}${col.nullable ? ", nullable" : ""}`}
+                            title={`${col.dataType}${col.nullable ? ", nullable" : ""}${isPk ? ", primary key" : ""}`}
                             className={cn(
                               "rounded border px-2 py-0.5 font-mono text-[11px] transition-colors",
                               isHidden
@@ -202,13 +273,18 @@ export function TablesBrowser({ config, active }: Props) {
                             )}
                             onClick={() =>
                               setHiddenColumns((prev) => {
-                                const current = new Set(prev[key] ?? []);
+                                const current = new Set(prev[tKey] ?? []);
                                 if (current.has(col.name)) current.delete(col.name);
                                 else current.add(col.name);
-                                return { ...prev, [key]: current };
+                                return { ...prev, [tKey]: current };
                               })
                             }
                           >
+                            {isPk ? (
+                              <span className="mr-1 text-[9px] font-semibold text-accent">
+                                PK
+                              </span>
+                            ) : null}
                             {col.name}
                             <span className="ml-1 text-muted">{col.dataType}</span>
                           </button>
@@ -236,7 +312,14 @@ export function TablesBrowser({ config, active }: Props) {
                                   key={col.name}
                                   className="border-b border-line px-3 py-2 font-mono text-xs font-semibold tracking-wide text-muted"
                                 >
-                                  <div>{col.name}</div>
+                                  <div>
+                                  {table.primaryKey.includes(col.name) ? (
+                                    <span className="mr-1 text-[9px] font-semibold text-accent">
+                                      PK
+                                    </span>
+                                  ) : null}
+                                  {col.name}
+                                </div>
                                   <div className="font-normal text-[10px] text-muted/70">
                                     {col.dataType}
                                   </div>
@@ -255,15 +338,38 @@ export function TablesBrowser({ config, active }: Props) {
                                 </td>
                               </tr>
                             ) : (
-                              table.rows.map((row, i) => (
-                                <tr key={i} className="odd:bg-panel even:bg-surface/40">
+                              table.rows.map((row, rowIndex) => (
+                                <tr
+                                  key={rowIndex}
+                                  className="odd:bg-panel even:bg-surface/40"
+                                >
                                   {visibleColumns.map((col) => (
                                     <td
                                       key={col.name}
-                                      className="max-w-xs truncate border-b border-line/70 px-3 py-1.5 font-mono text-xs text-ink"
-                                      title={formatCellTitle(row[col.name])}
+                                      className="max-w-xs border-b border-line/70 px-1 py-0.5 font-mono text-xs text-ink"
                                     >
-                                      <CellValue value={row[col.name]} />
+                                      <EditableCell
+                                        value={row[col.name]}
+                                        column={col}
+                                        editable={editable}
+                                        onSave={async (raw) => {
+                                          try {
+                                            await handleCellSave({
+                                              table,
+                                              rowIndex,
+                                              column: col,
+                                              raw,
+                                            });
+                                          } catch (err) {
+                                            setEditError(
+                                              err instanceof Error
+                                                ? err.message
+                                                : "Failed to update cell",
+                                            );
+                                            throw err;
+                                          }
+                                        }}
+                                      />
                                     </td>
                                   ))}
                                 </tr>
@@ -282,6 +388,147 @@ export function TablesBrowser({ config, active }: Props) {
       </div>
     </section>
   );
+}
+
+function EditableCell({
+  value,
+  column,
+  editable,
+  onSave,
+}: {
+  value: unknown;
+  column: BrowseColumn;
+  editable: boolean;
+  onSave: (raw: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  if (!editable) {
+    return (
+      <div className="truncate px-2 py-1" title={formatCellTitle(value)}>
+        <CellValue value={value} />
+      </div>
+    );
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="block w-full truncate rounded px-2 py-1 text-left hover:bg-accent/10"
+        title={`${formatCellTitle(value)} — double-click to edit`}
+        onDoubleClick={() => {
+          setDraft(valueToDraft(value));
+          setEditing(true);
+        }}
+      >
+        <CellValue value={value} />
+      </button>
+    );
+  }
+
+  const commit = async () => {
+    setSaving(true);
+    try {
+      await onSave(draft);
+      setEditing(false);
+    } catch {
+      // keep editing; parent shows error
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-1 px-1">
+      <input
+        ref={inputRef}
+        value={draft}
+        disabled={saving}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void commit();
+          }
+          if (e.key === "Escape") {
+            e.preventDefault();
+            setEditing(false);
+          }
+        }}
+        onBlur={() => {
+          if (!saving) void commit();
+        }}
+        className="h-7 w-full min-w-[6rem] rounded border border-accent/40 bg-panel px-2 font-mono text-xs outline-none focus:ring-2 focus:ring-accent/30"
+        placeholder={column.nullable ? "value or NULL" : "value"}
+      />
+      {saving && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted" />}
+    </div>
+  );
+}
+
+function valueToDraft(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function parseEditedValue(raw: string, column: BrowseColumn): unknown {
+  const trimmed = raw.trim();
+  if (trimmed === "" || trimmed.toUpperCase() === "NULL") {
+    if (!column.nullable) {
+      throw new Error(`Column ${column.name} is not nullable`);
+    }
+    return null;
+  }
+
+  const type = column.dataType.toLowerCase();
+  if (
+    type.includes("int") ||
+    type.includes("real") ||
+    type.includes("double") ||
+    type.includes("numeric") ||
+    type.includes("decimal") ||
+    type === "float" ||
+    type === "number"
+  ) {
+    const num = Number(trimmed);
+    if (!Number.isFinite(num)) throw new Error(`Invalid number: ${raw}`);
+    return num;
+  }
+
+  if (type.includes("bool")) {
+    const lower = trimmed.toLowerCase();
+    if (["true", "t", "1", "yes"].includes(lower)) return true;
+    if (["false", "f", "0", "no"].includes(lower)) return false;
+    throw new Error(`Invalid boolean: ${raw}`);
+  }
+
+  if (type.includes("json")) {
+    try {
+      return JSON.parse(trimmed) as unknown;
+    } catch {
+      throw new Error("Invalid JSON");
+    }
+  }
+
+  return raw;
+}
+
+function valuesEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || a === undefined || b === undefined) return false;
+  if (typeof a === "object" || typeof b === "object") {
+    return JSON.stringify(a) === JSON.stringify(b);
+  }
+  return String(a) === String(b);
 }
 
 function tableKey(table: BrowseTable): string {
