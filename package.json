@@ -1,0 +1,12 @@
+{
+  "name": "postgres-web-viewer",
+  "private": true,
+  "workspaces": ["server", "client"],
+  "scripts": {
+    "dev:server": "bun run --cwd server dev",
+    "dev:client": "bun run --cwd client dev",
+    "build": "bun run --cwd client build",
+    "start": "bun run --cwd server start",
+    "check": "bun run --cwd server check && bun run --cwd client build"
+  }
+}
