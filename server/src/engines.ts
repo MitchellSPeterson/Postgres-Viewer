@@ -13,6 +13,7 @@ export type BrowseTable = {
   schema: string;
   name: string;
   columns: BrowseColumn[];
+  primaryKey: string[];
   rows: Record<string, unknown>[];
   rowCount: number;
   totalRows: number;
@@ -64,11 +65,26 @@ function createPostgres(config: PostgresConfig) {
 function openSqlite(config: SqliteConfig, readonly = true): Database {
   const filePath = config.path.trim();
   try {
-    accessSync(filePath, constants.R_OK);
+    accessSync(filePath, readonly ? constants.R_OK : constants.R_OK | constants.W_OK);
   } catch {
-    throw new Error(`SQLite file not found or unreadable: ${filePath}`);
+    throw new Error(
+      readonly
+        ? `SQLite file not found or unreadable: ${filePath}`
+        : `SQLite file not found or not writable: ${filePath}`,
+    );
   }
-  return new Database(filePath, { readonly, create: false });
+  // ponytail: bun:sqlite rejects `{ readonly: false }`; use readwrite for writes.
+  return new Database(
+    filePath,
+    readonly ? { readonly: true, create: false } : { readwrite: true, create: false },
+  );
+}
+
+function assertSafeIdent(name: string, label: string): string {
+  if (!name || typeof name !== "string" || name.length > 256 || name.includes("\0")) {
+    throw new Error(`Invalid ${label}`);
+  }
+  return name;
 }
 
 export async function testTarget(config: ConnectionConfig): Promise<void> {
@@ -156,12 +172,17 @@ export async function browseTarget(
           name: string;
           type: string;
           notnull: number;
+          pk: number;
         }>;
         const columns: BrowseColumn[] = info.map((col) => ({
           name: col.name,
           dataType: col.type || "ANY",
           nullable: col.notnull === 0,
         }));
+        const primaryKey = info
+          .filter((col) => col.pk > 0)
+          .sort((a, b) => a.pk - b.pk)
+          .map((col) => col.name);
 
         const totalRows = Number(
           (
@@ -179,6 +200,7 @@ export async function browseTarget(
           schema: "main",
           name,
           columns,
+          primaryKey,
           rows,
           rowCount: rows.length,
           totalRows,
@@ -225,6 +247,20 @@ export async function browseTarget(
         nullable: col.is_nullable === "YES",
       }));
 
+      const pkRows = await sql`
+        SELECT kcu.column_name, kcu.ordinal_position
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON tc.constraint_name = kcu.constraint_name
+         AND tc.table_schema = kcu.table_schema
+         AND tc.table_name = kcu.table_name
+        WHERE tc.constraint_type = 'PRIMARY KEY'
+          AND tc.table_schema = ${schema}
+          AND tc.table_name = ${name}
+        ORDER BY kcu.ordinal_position
+      `;
+      const primaryKey = pkRows.map((row) => String(row.column_name));
+
       const countResult = await sql.unsafe(`SELECT COUNT(*)::int AS count FROM ${qualified}`);
       const totalRows = Number(
         (countResult[0] as { count: number } | undefined)?.count ?? 0,
@@ -250,6 +286,7 @@ export async function browseTarget(
                 dataType: "unknown",
                 nullable: true,
               })),
+        primaryKey,
         rows,
         rowCount: rows.length,
         totalRows,
@@ -262,6 +299,86 @@ export async function browseTarget(
       limit,
       durationMs: Math.round(performance.now() - started),
     };
+  } finally {
+    await sql.end({ timeout: 1 });
+  }
+}
+
+export type UpdateCellInput = {
+  schema: string;
+  table: string;
+  column: string;
+  value: unknown;
+  primaryKey: Record<string, unknown>;
+};
+
+export async function updateCell(
+  config: ConnectionConfig,
+  input: UpdateCellInput,
+): Promise<{ changes: number }> {
+  const schema = assertSafeIdent(input.schema, "schema");
+  const table = assertSafeIdent(input.table, "table");
+  const column = assertSafeIdent(input.column, "column");
+  const pkEntries = Object.entries(input.primaryKey);
+  if (pkEntries.length === 0) {
+    throw new Error("Primary key is required to update a cell");
+  }
+  for (const [key] of pkEntries) {
+    assertSafeIdent(key, "primary key column");
+  }
+
+  if (config.engine === "sqlite") {
+    const db = openSqlite(config, false);
+    try {
+      const qualified = quoteIdent(table);
+      const setClause = `${quoteIdent(column)} = ?`;
+      const whereClause = pkEntries
+        .map(([key], i) => {
+          const val = pkEntries[i]![1];
+          return val === null || val === undefined
+            ? `${quoteIdent(key)} IS NULL`
+            : `${quoteIdent(key)} = ?`;
+        })
+        .join(" AND ");
+      const params: unknown[] = [input.value];
+      for (const [, val] of pkEntries) {
+        if (val !== null && val !== undefined) params.push(val);
+      }
+      const result = db
+        .query(`UPDATE ${qualified} SET ${setClause} WHERE ${whereClause}`)
+        .run(...params);
+      if (result.changes === 0) {
+        throw new Error("No rows updated — primary key may not match");
+      }
+      return { changes: result.changes };
+    } finally {
+      db.close();
+    }
+  }
+
+  const sql = createPostgres(config);
+  try {
+    const qualified = `${quoteIdent(schema)}.${quoteIdent(table)}`;
+    const setClause = `${quoteIdent(column)} = $1`;
+    const whereParts: string[] = [];
+    const params: unknown[] = [input.value];
+    let paramIndex = 2;
+    for (const [key, val] of pkEntries) {
+      if (val === null || val === undefined) {
+        whereParts.push(`${quoteIdent(key)} IS NULL`);
+      } else {
+        whereParts.push(`${quoteIdent(key)} = $${paramIndex}`);
+        params.push(val);
+        paramIndex += 1;
+      }
+    }
+    const query = `UPDATE ${qualified} SET ${setClause} WHERE ${whereParts.join(" AND ")}`;
+    const result = await sql.unsafe(query, params);
+    const changes = result.count ?? 0;
+    if (changes === 0) {
+      throw new Error("No rows updated — primary key may not match");
+    }
+    return { changes };
   } finally {
     await sql.end({ timeout: 1 });
   }
