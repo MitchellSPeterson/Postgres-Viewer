@@ -14,6 +14,29 @@ export type QuerySuccess = {
   durationMs: number;
 };
 
+export type BrowseColumn = {
+  name: string;
+  dataType: string;
+  nullable: boolean;
+};
+
+export type BrowseTable = {
+  schema: string;
+  name: string;
+  columns: BrowseColumn[];
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  totalRows: number;
+  truncated: boolean;
+};
+
+export type BrowseSuccess = {
+  ok: true;
+  tables: BrowseTable[];
+  limit: number;
+  durationMs: number;
+};
+
 export type ApiError = {
   ok: false;
   error: string;
@@ -46,6 +69,18 @@ export async function runQuery(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...config, sql }),
+  });
+  return res.json();
+}
+
+export async function browseTables(
+  config: ConnectionConfig,
+  limit?: number,
+): Promise<BrowseSuccess | ApiError> {
+  const res = await fetch("/api/browse", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...config, ...(limit !== undefined ? { limit } : {}) }),
   });
   return res.json();
 }

@@ -48,6 +48,13 @@ function formatError(err: unknown, fallback: string): string {
   return code ? `${fallback} (${code})` : fallback;
 }
 
+function quoteIdent(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+const DEFAULT_BROWSE_LIMIT = 500;
+const MAX_BROWSE_LIMIT = 5000;
+
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
@@ -143,6 +150,106 @@ Bun.serve({
         });
       } catch (err) {
         return json({ ok: false, error: formatError(err, "Query failed") }, 400);
+      } finally {
+        await sql.end({ timeout: 1 });
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/browse") {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ ok: false, error: "Invalid JSON body" }, 400);
+      }
+
+      if (!body || typeof body !== "object") {
+        return json({ ok: false, error: "Invalid request body" }, 400);
+      }
+
+      const { limit: rawLimit, ...rest } = body as Record<string, unknown>;
+      if (!isConnectionConfig(rest)) {
+        return json({ ok: false, error: "Missing or invalid connection fields" }, 400);
+      }
+
+      let limit = DEFAULT_BROWSE_LIMIT;
+      if (rawLimit !== undefined) {
+        if (typeof rawLimit !== "number" || !Number.isFinite(rawLimit) || rawLimit < 1) {
+          return json({ ok: false, error: "limit must be a positive number" }, 400);
+        }
+        limit = Math.min(Math.floor(rawLimit), MAX_BROWSE_LIMIT);
+      }
+
+      const sql = createSql(rest);
+      const started = performance.now();
+      try {
+        const tableRows = await sql`
+          SELECT table_schema, table_name
+          FROM information_schema.tables
+          WHERE table_type = 'BASE TABLE'
+            AND table_schema NOT IN ('pg_catalog', 'information_schema')
+          ORDER BY table_schema, table_name
+        `;
+
+        const tables = [];
+        for (const table of tableRows) {
+          const schema = String(table.table_schema);
+          const name = String(table.table_name);
+          const qualified = `${quoteIdent(schema)}.${quoteIdent(name)}`;
+
+          const columnRows = await sql`
+            SELECT column_name, data_type, is_nullable, ordinal_position
+            FROM information_schema.columns
+            WHERE table_schema = ${schema} AND table_name = ${name}
+            ORDER BY ordinal_position
+          `;
+
+          const columns = columnRows.map((col) => ({
+            name: String(col.column_name),
+            dataType: String(col.data_type),
+            nullable: col.is_nullable === "YES",
+          }));
+
+          const countResult = await sql.unsafe(`SELECT COUNT(*)::int AS count FROM ${qualified}`);
+          const totalRows = Number(
+            (countResult[0] as { count: number } | undefined)?.count ?? 0,
+          );
+
+          const data = await sql.unsafe(`SELECT * FROM ${qualified} LIMIT ${limit}`);
+          const rows = [...data] as Record<string, unknown>[];
+          const dataColumns =
+            columns.length > 0
+              ? columns.map((c) => c.name)
+              : rows.length > 0
+                ? Object.keys(rows[0]!)
+                : (data.columns?.map((c: { name: string }) => c.name) ?? []);
+
+          tables.push({
+            schema,
+            name,
+            columns:
+              columns.length > 0
+                ? columns
+                : dataColumns.map((colName) => ({
+                    name: colName,
+                    dataType: "unknown",
+                    nullable: true,
+                  })),
+            rows,
+            rowCount: rows.length,
+            totalRows,
+            truncated: totalRows > rows.length,
+          });
+        }
+
+        return json({
+          ok: true,
+          tables,
+          limit,
+          durationMs: Math.round(performance.now() - started),
+        });
+      } catch (err) {
+        return json({ ok: false, error: formatError(err, "Browse failed") }, 400);
       } finally {
         await sql.end({ timeout: 1 });
       }
