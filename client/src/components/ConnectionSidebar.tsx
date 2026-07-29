@@ -1,5 +1,12 @@
 import { useEffect, useState, type ChangeEvent, type ReactNode } from "react";
-import { BookmarkPlus, Loader2, PlugZap, Trash2 } from "lucide-react";
+import {
+  BookmarkPlus,
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  PlugZap,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,22 +25,25 @@ import { cn } from "@/lib/utils";
 type Props = {
   config: ConnectionConfig;
   onChange: (config: ConnectionConfig) => void;
-  onTest: () => void;
-  testing: boolean;
-  onLoadedSaved?: (saved: SavedConnection) => void;
+  onEngineChange: (engine: ConnectionConfig["engine"]) => void;
+  onConnect: () => void;
+  connecting: boolean;
+  onSelectSaved: (saved: SavedConnection) => void;
 };
 
 export function ConnectionSidebar({
   config,
   onChange,
-  onTest,
-  testing,
-  onLoadedSaved,
+  onEngineChange,
+  onConnect,
+  connecting,
+  onSelectSaved,
 }: Props) {
   const [saved, setSaved] = useState<SavedConnection[]>([]);
   const [saveName, setSaveName] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedOpen, setSavedOpen] = useState(true);
 
   const refreshSaved = async () => {
     try {
@@ -47,22 +57,6 @@ export function ConnectionSidebar({
   useEffect(() => {
     void refreshSaved();
   }, []);
-
-  const setEngine = (engine: ConnectionConfig["engine"]) => {
-    if (engine === config.engine) return;
-    if (engine === "postgres") {
-      onChange({
-        engine: "postgres",
-        host: "localhost",
-        port: 5432,
-        database: "postgres",
-        username: "postgres",
-        password: "",
-      });
-    } else {
-      onChange({ engine: "sqlite", path: "" });
-    }
-  };
 
   const handleSave = async () => {
     const name =
@@ -102,50 +96,62 @@ export function ConnectionSidebar({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        <section className="border-b border-line px-4 py-3">
-          <div className="mb-2 flex items-center justify-between">
+        <section className="border-b border-line">
+          <button
+            type="button"
+            className="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-left hover:bg-surface/60"
+            onClick={() => setSavedOpen((open) => !open)}
+            aria-expanded={savedOpen}
+          >
+            {savedOpen ? (
+              <ChevronDown className="size-3.5 text-muted" />
+            ) : (
+              <ChevronRight className="size-3.5 text-muted" />
+            )}
             <h3 className="text-xs font-semibold uppercase tracking-wide text-muted">
               Saved
             </h3>
-            <span className="text-[11px] text-muted">{saved.length}</span>
-          </div>
-          {saved.length === 0 ? (
-            <p className="text-xs text-muted">No saved connections yet.</p>
-          ) : (
-            <ul className="space-y-1.5">
-              {saved.map((item) => (
-                <li
-                  key={item.id}
-                  className="group flex items-start gap-1 rounded-md border border-line bg-surface/50 px-2 py-1.5"
-                >
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 text-left"
-                    onClick={() => {
-                      onChange(item.config);
-                      onLoadedSaved?.(item);
-                    }}
-                    title={connectionLabel(item.config)}
-                  >
-                    <div className="truncate text-sm font-medium text-ink">
-                      {item.name}
-                    </div>
-                    <div className="truncate font-mono text-[11px] text-muted">
-                      {item.engine === "sqlite" ? "SQLite" : "Postgres"} ·{" "}
-                      {connectionLabel(item.config)}
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded p-1 text-muted opacity-70 hover:bg-danger-bg hover:text-danger hover:opacity-100"
-                    aria-label={`Delete ${item.name}`}
-                    onClick={() => void handleDelete(item.id)}
-                  >
-                    <Trash2 className="size-3.5" />
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <span className="ml-auto text-[11px] text-muted">{saved.length}</span>
+          </button>
+
+          {savedOpen && (
+            <div className="px-4 pb-3">
+              {saved.length === 0 ? (
+                <p className="text-xs text-muted">No saved connections yet.</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {saved.map((item) => (
+                    <li
+                      key={item.id}
+                      className="group flex cursor-pointer items-start gap-1 rounded-md border border-line bg-surface/50 px-2 py-1.5 hover:border-accent/40 hover:bg-accent/5"
+                    >
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 cursor-pointer text-left"
+                        onClick={() => onSelectSaved(item)}
+                        title={`Connect to ${connectionLabel(item.config)}`}
+                      >
+                        <div className="truncate text-sm font-medium text-ink">
+                          {item.name}
+                        </div>
+                        <div className="truncate font-mono text-[11px] text-muted">
+                          {item.engine === "sqlite" ? "SQLite" : "Postgres"} ·{" "}
+                          {connectionLabel(item.config)}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        className="cursor-pointer rounded p-1 text-muted opacity-70 hover:bg-danger-bg hover:text-danger hover:opacity-100"
+                        aria-label={`Delete ${item.name}`}
+                        onClick={() => void handleDelete(item.id)}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </section>
 
@@ -153,18 +159,18 @@ export function ConnectionSidebar({
           className="flex flex-col gap-3 p-4"
           onSubmit={(e) => {
             e.preventDefault();
-            onTest();
+            onConnect();
           }}
         >
           <div className="flex rounded-md border border-line bg-surface/70 p-0.5">
             <EngineTab
               active={config.engine === "postgres"}
-              onClick={() => setEngine("postgres")}
+              onClick={() => onEngineChange("postgres")}
               label="PostgreSQL"
             />
             <EngineTab
               active={config.engine === "sqlite"}
-              onClick={() => setEngine("sqlite")}
+              onClick={() => onEngineChange("sqlite")}
               label="SQLite"
             />
           </div>
@@ -175,7 +181,10 @@ export function ConnectionSidebar({
               onChange={(next) => onChange(next)}
             />
           ) : (
-            <SqliteFields config={config} onChange={(next) => onChange(next)} />
+            <SqliteFields
+              config={config}
+              onChange={(next) => onChange(next)}
+            />
           )}
 
           <div className="space-y-1.5 border-t border-line pt-3">
@@ -205,13 +214,13 @@ export function ConnectionSidebar({
           </div>
 
           <div className="pt-1">
-            <Button type="submit" className="w-full" disabled={testing}>
-              {testing ? (
+            <Button type="submit" className="w-full" disabled={connecting}>
+              {connecting ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
                 <PlugZap className="size-4" />
               )}
-              {testing ? "Testing…" : "Test Connection"}
+              {connecting ? "Connecting…" : "Connect"}
             </Button>
           </div>
         </form>
@@ -234,7 +243,7 @@ function EngineTab({
       type="button"
       onClick={onClick}
       className={cn(
-        "h-7 flex-1 rounded px-2 text-xs font-medium transition-colors",
+        "h-7 flex-1 cursor-pointer rounded px-2 text-xs font-medium transition-colors",
         active ? "bg-panel text-ink shadow-sm" : "text-muted hover:text-ink",
       )}
     >

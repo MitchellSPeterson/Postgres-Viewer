@@ -9,11 +9,14 @@ export type BrowseColumn = {
   nullable: boolean;
 };
 
-export type BrowseTable = {
+export type BrowseTableMeta = {
   schema: string;
   name: string;
   columns: BrowseColumn[];
   primaryKey: string[];
+};
+
+export type BrowseTable = BrowseTableMeta & {
   rows: Record<string, unknown>[];
   rowCount: number;
   totalRows: number;
@@ -27,8 +30,18 @@ export type QueryResult = {
   durationMs: number;
 };
 
-export type BrowseResult = {
-  tables: BrowseTable[];
+export type BrowseMetaResult = {
+  tables: BrowseTableMeta[];
+  durationMs: number;
+};
+
+export type TableRowsResult = {
+  schema: string;
+  name: string;
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  totalRows: number;
+  truncated: boolean;
   limit: number;
   durationMs: number;
 };
@@ -146,10 +159,10 @@ export async function runTargetQuery(
   }
 }
 
-export async function browseTarget(
+/** Fast path: table/column/PK metadata only — no row scans. */
+export async function listTablesMeta(
   config: ConnectionConfig,
-  limit: number,
-): Promise<BrowseResult> {
+): Promise<BrowseMetaResult> {
   const started = performance.now();
 
   if (config.engine === "sqlite") {
@@ -164,52 +177,134 @@ export async function browseTarget(
         )
         .all() as Array<{ table_name: string }>;
 
-      const tables: BrowseTable[] = [];
-      for (const table of tableRows) {
+      const tables: BrowseTableMeta[] = tableRows.map((table) => {
         const name = table.table_name;
-        const qualified = quoteIdent(name);
-        const info = db.query(`PRAGMA table_info(${qualified})`).all() as Array<{
+        const info = db.query(`PRAGMA table_info(${quoteIdent(name)})`).all() as Array<{
           name: string;
           type: string;
           notnull: number;
           pk: number;
         }>;
-        const columns: BrowseColumn[] = info.map((col) => ({
-          name: col.name,
-          dataType: col.type || "ANY",
-          nullable: col.notnull === 0,
-        }));
-        const primaryKey = info
-          .filter((col) => col.pk > 0)
-          .sort((a, b) => a.pk - b.pk)
-          .map((col) => col.name);
-
-        const totalRows = Number(
-          (
-            db.query(`SELECT COUNT(*) AS count FROM ${qualified}`).get() as {
-              count: number | bigint;
-            }
-          ).count,
-        );
-
-        const rows = db
-          .query(`SELECT * FROM ${qualified} LIMIT ?`)
-          .all(limit) as Record<string, unknown>[];
-
-        tables.push({
+        return {
           schema: "main",
           name,
-          columns,
-          primaryKey,
-          rows,
-          rowCount: rows.length,
-          totalRows,
-          truncated: totalRows > rows.length,
-        });
-      }
+          columns: info.map((col) => ({
+            name: col.name,
+            dataType: col.type || "ANY",
+            nullable: col.notnull === 0,
+          })),
+          primaryKey: info
+            .filter((col) => col.pk > 0)
+            .sort((a, b) => a.pk - b.pk)
+            .map((col) => col.name),
+        };
+      });
 
+      return { tables, durationMs: Math.round(performance.now() - started) };
+    } finally {
+      db.close();
+    }
+  }
+
+  const sql = createPostgres(config);
+  try {
+    // Batch metadata in 3 queries instead of ~3N round-trips per table.
+    const tablesList = await sql`
+      SELECT table_schema, table_name
+      FROM information_schema.tables
+      WHERE table_type = 'BASE TABLE'
+        AND table_schema NOT IN ('pg_catalog', 'information_schema')
+      ORDER BY table_schema, table_name
+    `;
+
+    const allColumns = await sql`
+      SELECT table_schema, table_name, column_name, data_type, is_nullable, ordinal_position
+      FROM information_schema.columns
+      WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+      ORDER BY table_schema, table_name, ordinal_position
+    `;
+
+    const allPks = await sql`
+      SELECT tc.table_schema, tc.table_name, kcu.column_name, kcu.ordinal_position
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu
+        ON tc.constraint_name = kcu.constraint_name
+       AND tc.table_schema = kcu.table_schema
+       AND tc.table_name = kcu.table_name
+      WHERE tc.constraint_type = 'PRIMARY KEY'
+        AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
+      ORDER BY tc.table_schema, tc.table_name, kcu.ordinal_position
+    `;
+
+    const columnsByTable = new Map<string, BrowseColumn[]>();
+    for (const col of allColumns) {
+      const key = `${col.table_schema}.${col.table_name}`;
+      const list = columnsByTable.get(key) ?? [];
+      list.push({
+        name: String(col.column_name),
+        dataType: String(col.data_type),
+        nullable: col.is_nullable === "YES",
+      });
+      columnsByTable.set(key, list);
+    }
+
+    const pkByTable = new Map<string, string[]>();
+    for (const pk of allPks) {
+      const key = `${pk.table_schema}.${pk.table_name}`;
+      const list = pkByTable.get(key) ?? [];
+      list.push(String(pk.column_name));
+      pkByTable.set(key, list);
+    }
+
+    const tables: BrowseTableMeta[] = tablesList.map((table) => {
+      const schema = String(table.table_schema);
+      const name = String(table.table_name);
+      const key = `${schema}.${name}`;
       return {
-        tables,
+        schema,
+        name,
+        columns: columnsByTable.get(key) ?? [],
+        primaryKey: pkByTable.get(key) ?? [],
+      };
+    });
+
+    return { tables, durationMs: Math.round(performance.now() - started) };
+  } finally {
+    await sql.end({ timeout: 1 });
+  }
+}
+
+export async function fetchTableRows(
+  config: ConnectionConfig,
+  schema: string,
+  table: string,
+  limit: number,
+): Promise<TableRowsResult> {
+  const started = performance.now();
+  const safeSchema = assertSafeIdent(schema, "schema");
+  const safeTable = assertSafeIdent(table, "table");
+
+  if (config.engine === "sqlite") {
+    const db = openSqlite(config);
+    try {
+      const qualified = quoteIdent(safeTable);
+      const totalRows = Number(
+        (
+          db.query(`SELECT COUNT(*) AS count FROM ${qualified}`).get() as {
+            count: number | bigint;
+          }
+        ).count,
+      );
+      const rows = db
+        .query(`SELECT * FROM ${qualified} LIMIT ?`)
+        .all(limit) as Record<string, unknown>[];
+      return {
+        schema: "main",
+        name: safeTable,
+        rows,
+        rowCount: rows.length,
+        totalRows,
+        truncated: totalRows > rows.length,
         limit,
         durationMs: Math.round(performance.now() - started),
       };
@@ -220,82 +315,20 @@ export async function browseTarget(
 
   const sql = createPostgres(config);
   try {
-    const tableRows = await sql`
-      SELECT table_schema, table_name
-      FROM information_schema.tables
-      WHERE table_type = 'BASE TABLE'
-        AND table_schema NOT IN ('pg_catalog', 'information_schema')
-      ORDER BY table_schema, table_name
-    `;
-
-    const tables: BrowseTable[] = [];
-    for (const table of tableRows) {
-      const schema = String(table.table_schema);
-      const name = String(table.table_name);
-      const qualified = `${quoteIdent(schema)}.${quoteIdent(name)}`;
-
-      const columnRows = await sql`
-        SELECT column_name, data_type, is_nullable, ordinal_position
-        FROM information_schema.columns
-        WHERE table_schema = ${schema} AND table_name = ${name}
-        ORDER BY ordinal_position
-      `;
-
-      const columns = columnRows.map((col) => ({
-        name: String(col.column_name),
-        dataType: String(col.data_type),
-        nullable: col.is_nullable === "YES",
-      }));
-
-      const pkRows = await sql`
-        SELECT kcu.column_name, kcu.ordinal_position
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON tc.constraint_name = kcu.constraint_name
-         AND tc.table_schema = kcu.table_schema
-         AND tc.table_name = kcu.table_name
-        WHERE tc.constraint_type = 'PRIMARY KEY'
-          AND tc.table_schema = ${schema}
-          AND tc.table_name = ${name}
-        ORDER BY kcu.ordinal_position
-      `;
-      const primaryKey = pkRows.map((row) => String(row.column_name));
-
-      const countResult = await sql.unsafe(`SELECT COUNT(*)::int AS count FROM ${qualified}`);
-      const totalRows = Number(
-        (countResult[0] as { count: number } | undefined)?.count ?? 0,
-      );
-
-      const data = await sql.unsafe(`SELECT * FROM ${qualified} LIMIT ${limit}`);
-      const rows = [...data] as Record<string, unknown>[];
-      const dataColumns =
-        columns.length > 0
-          ? columns.map((c) => c.name)
-          : rows.length > 0
-            ? Object.keys(rows[0]!)
-            : (data.columns?.map((c: { name: string }) => c.name) ?? []);
-
-      tables.push({
-        schema,
-        name,
-        columns:
-          columns.length > 0
-            ? columns
-            : dataColumns.map((colName) => ({
-                name: colName,
-                dataType: "unknown",
-                nullable: true,
-              })),
-        primaryKey,
-        rows,
-        rowCount: rows.length,
-        totalRows,
-        truncated: totalRows > rows.length,
-      });
-    }
-
+    const qualified = `${quoteIdent(safeSchema)}.${quoteIdent(safeTable)}`;
+    const countResult = await sql.unsafe(`SELECT COUNT(*)::int AS count FROM ${qualified}`);
+    const totalRows = Number(
+      (countResult[0] as { count: number } | undefined)?.count ?? 0,
+    );
+    const data = await sql.unsafe(`SELECT * FROM ${qualified} LIMIT ${limit}`);
+    const rows = [...data] as Record<string, unknown>[];
     return {
-      tables,
+      schema: safeSchema,
+      name: safeTable,
+      rows,
+      rowCount: rows.length,
+      totalRows,
+      truncated: totalRows > rows.length,
       limit,
       durationMs: Math.round(performance.now() - started),
     };
