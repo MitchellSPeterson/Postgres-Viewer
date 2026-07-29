@@ -76,6 +76,31 @@ export type ApiError = {
   error: string;
 };
 
+export type AppSettings = {
+  darkMode: boolean;
+  safeMode: boolean;
+};
+
+export type QueryHistoryItem = {
+  id: number;
+  sql: string;
+  engine: Engine | null;
+  connectionLabel: string | null;
+  ok: boolean;
+  error: string | null;
+  rowCount: number | null;
+  durationMs: number | null;
+  createdAt: number;
+};
+
+export type Snippet = {
+  id: number;
+  name: string;
+  sql: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export const DEFAULT_POSTGRES: PostgresConfig = {
   engine: "postgres",
   host: "localhost",
@@ -179,5 +204,56 @@ export async function touchConnection(
   id: number,
 ): Promise<{ ok: true; connection: SavedConnection } | ApiError> {
   const res = await fetch(`/api/connections/${id}?touch=1`, { method: "POST" });
+  return res.json();
+}
+
+export async function getAppSettings(): Promise<
+  { ok: true; settings: AppSettings } | ApiError
+> {
+  const res = await fetch("/api/settings");
+  return res.json();
+}
+
+export async function patchAppSettings(
+  patch: Partial<AppSettings>,
+): Promise<{ ok: true; settings: AppSettings } | ApiError> {
+  const res = await fetch("/api/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return res.json();
+}
+
+export async function fetchQueryHistory(): Promise<
+  { ok: true; history: QueryHistoryItem[] } | ApiError
+> {
+  const res = await fetch("/api/history");
+  return res.json();
+}
+
+export async function clearHistory(): Promise<{ ok: true } | ApiError> {
+  const res = await fetch("/api/history", { method: "DELETE" });
+  return res.json();
+}
+
+export async function fetchSnippets(): Promise<
+  { ok: true; snippets: Snippet[] } | ApiError
+> {
+  const res = await fetch("/api/snippets");
+  return res.json();
+}
+
+export async function createSnippet(
+  name: string,
+  sql: string,
+): Promise<{ ok: true; snippet: Snippet } | ApiError> {
+  return postJson("/api/snippets", { name, sql });
+}
+
+export async function removeSnippet(
+  id: number,
+): Promise<{ ok: true } | ApiError> {
+  const res = await fetch(`/api/snippets/${id}`, { method: "DELETE" });
   return res.json();
 }

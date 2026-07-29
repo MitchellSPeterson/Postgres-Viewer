@@ -1,8 +1,10 @@
-import { useState } from "react";
-import { Database } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Database, Settings } from "lucide-react";
 import { ConnectionSidebar } from "@/components/ConnectionSidebar";
 import { QueryEditor } from "@/components/QueryEditor";
+import { QueryLibrary } from "@/components/QueryLibrary";
 import { ResultsViewer } from "@/components/ResultsViewer";
+import { SettingsModal } from "@/components/SettingsModal";
 import { TablesBrowser } from "@/components/TablesBrowser";
 import { ToastStack, type Toast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
@@ -10,9 +12,12 @@ import {
   DEFAULT_POSTGRES,
   DEFAULT_SQLITE,
   connectionLabel,
+  getAppSettings,
+  patchAppSettings,
   runQuery,
   testConnection,
   touchConnection,
+  type AppSettings,
   type ConnectionConfig,
   type Engine,
   type PostgresConfig,
@@ -29,6 +34,8 @@ type Drafts = {
   sqlite: SqliteConfig;
 };
 
+const DEFAULT_SETTINGS: AppSettings = { darkMode: false, safeMode: false };
+
 export default function App() {
   const [engine, setEngine] = useState<Engine>("postgres");
   const [drafts, setDrafts] = useState<Drafts>({
@@ -37,7 +44,6 @@ export default function App() {
   });
   const draft = drafts[engine];
 
-  // Live connection used by Query/Browse — unchanged when flipping engine tabs.
   const [live, setLive] = useState<ConnectionConfig | null>(null);
   const [savedId, setSavedId] = useState<number | null>(null);
   const [connected, setConnected] = useState(false);
@@ -48,8 +54,26 @@ export default function App() {
   const [result, setResult] = useState<QuerySuccess | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [libraryKey, setLibraryKey] = useState(0);
 
   const active = live ?? draft;
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await getAppSettings();
+        if (res.ok) setSettings(res.settings);
+      } catch {
+        // keep defaults
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", settings.darkMode);
+  }, [settings.darkMode]);
 
   const pushToast = (type: Toast["type"], message: string) => {
     setToasts((prev) => [...prev, { id: Date.now() + Math.random(), type, message }]);
@@ -70,13 +94,31 @@ export default function App() {
   const handleEngineChange = (nextEngine: Engine) => {
     if (nextEngine === engine) return;
     setEngine(nextEngine);
-    // Only swap the starter query if the editor still has the previous default.
     setSql((prev) => {
       if (prev.trim() === defaultSqlFor(draft).trim()) {
         return defaultSqlFor(drafts[nextEngine]);
       }
       return prev;
     });
+  };
+
+  const handleSettingsChange = async (patch: Partial<AppSettings>) => {
+    const optimistic = { ...settings, ...patch };
+    setSettings(optimistic);
+    try {
+      const res = await patchAppSettings(patch);
+      if (res.ok) setSettings(res.settings);
+      else {
+        pushToast("error", res.error);
+        const rollback = await getAppSettings();
+        if (rollback.ok) setSettings(rollback.settings);
+      }
+    } catch (err) {
+      pushToast(
+        "error",
+        err instanceof Error ? err.message : "Failed to save settings",
+      );
+    }
   };
 
   const connectWith = async (
@@ -148,6 +190,7 @@ export default function App() {
       setError(err instanceof Error ? err.message : "Failed to reach API server");
     } finally {
       setRunning(false);
+      setLibraryKey((k) => k + 1);
     }
   };
 
@@ -191,20 +234,37 @@ export default function App() {
               Browse Tables
             </Button>
           </div>
+          {settings.safeMode && (
+            <span className="rounded bg-accent/15 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-accent">
+              Safe Mode
+            </span>
+          )}
         </div>
-        <div className="flex min-w-0 items-center gap-2 text-xs text-muted">
-          <span
-            className={`size-2.5 shrink-0 rounded-full ${connected && live ? "bg-success" : "bg-danger"}`}
-            aria-hidden
-          />
-          <span className="shrink-0">
-            {connected && live ? "Connected" : "Disconnected"}
-          </span>
-          <span className="text-line">·</span>
-          <span className="truncate font-mono" title={connectionLabel(headerConfig)}>
-            {headerConfig.engine === "sqlite" ? "SQLite" : "Postgres"} ·{" "}
-            {connectionLabel(headerConfig)}
-          </span>
+        <div className="flex min-w-0 items-center gap-3 text-xs text-muted">
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className={`size-2.5 shrink-0 rounded-full ${connected && live ? "bg-success" : "bg-danger"}`}
+              aria-hidden
+            />
+            <span className="shrink-0">
+              {connected && live ? "Connected" : "Disconnected"}
+            </span>
+            <span className="text-line">·</span>
+            <span className="truncate font-mono" title={connectionLabel(headerConfig)}>
+              {headerConfig.engine === "sqlite" ? "SQLite" : "Postgres"} ·{" "}
+              {connectionLabel(headerConfig)}
+            </span>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setSettingsOpen(true)}
+            aria-label="Open settings"
+          >
+            <Settings className="size-3.5" />
+            Settings
+          </Button>
         </div>
       </header>
 
@@ -226,15 +286,31 @@ export default function App() {
                 onChange={setSql}
                 onExecute={handleExecute}
                 running={running}
+                safeMode={settings.safeMode}
               />
               <ResultsViewer result={result} error={error} running={running} />
+              <QueryLibrary
+                sql={sql}
+                onLoadSql={setSql}
+                refreshKey={libraryKey}
+              />
             </>
           ) : (
-            <TablesBrowser config={active} active={view === "browse"} />
+            <TablesBrowser
+              config={active}
+              active={view === "browse"}
+              safeMode={settings.safeMode}
+            />
           )}
         </main>
       </div>
 
+      <SettingsModal
+        open={settingsOpen}
+        settings={settings}
+        onClose={() => setSettingsOpen(false)}
+        onChange={(patch) => void handleSettingsChange(patch)}
+      />
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
