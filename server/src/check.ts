@@ -29,4 +29,11 @@ console.assert(isConnectionConfig({ ...good, host: 1 }) === false, "non-string h
 console.assert(isConnectionConfig(null) === false, "null accepted");
 console.assert(isConnectionConfig({}) === false, "empty object accepted");
 
+function quoteIdent(name: string): string {
+  return `"${name.replaceAll('"', '""')}"`;
+}
+
+console.assert(quoteIdent("users") === '"users"', "simple ident");
+console.assert(quoteIdent('weird"name') === '"weird""name"', "escaped quote");
+
 console.log("server check ok");
