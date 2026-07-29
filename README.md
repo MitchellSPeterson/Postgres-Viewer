@@ -37,7 +37,7 @@ bun run dev:client   # http://localhost:5173
 ## Features
 
 - Query editor with Cmd/Ctrl+Enter
-- Browse Tables view (collapse tables / hide columns; double-click cells to edit when a primary key exists)
+- Browse Tables view (collapse tables / hide columns; double-click cells to edit when a primary key exists; right-click to copy raw values with newlines preserved)
 - Save and reopen past connections (including passwords for local convenience)
 - Inspect SQLite `.db` / `.sqlite` files via bun:sqlite
 

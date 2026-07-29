@@ -11,7 +11,8 @@ import {
   Table2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CellValue, formatCellTitle } from "@/components/CellValue";
+import { CellValue, formatCellTitle, rawCellText } from "@/components/CellValue";
+import { CellWithCopyMenu } from "@/components/CellWithCopyMenu";
 import {
   browseTables,
   connectionKey,
@@ -141,7 +142,8 @@ export function TablesBrowser({ config, active }: Props) {
         <div>
           <h2 className="text-sm font-semibold text-ink">Tables</h2>
           <p className="text-xs text-muted">
-            Browse and edit cells. Double-click a value to change it (tables need a primary key).
+            Browse and edit cells. Double-click to edit, right-click to copy the raw value
+            (newlines preserved).
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -404,34 +406,42 @@ function EditableCell({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (editing) inputRef.current?.focus();
+    if (editing) {
+      inputRef.current?.focus();
+      const len = inputRef.current?.value.length ?? 0;
+      inputRef.current?.setSelectionRange(len, len);
+    }
   }, [editing]);
 
-  if (!editable) {
-    return (
-      <div className="truncate px-2 py-1" title={formatCellTitle(value)}>
-        <CellValue value={value} />
-      </div>
-    );
-  }
+  const display = (
+    <div
+      className={cn(
+        "max-h-24 overflow-hidden px-2 py-1 text-left",
+        editable && "cursor-pointer rounded hover:bg-accent/10",
+      )}
+      title={
+        editable
+          ? `${formatCellTitle(value)} — double-click to edit, right-click to copy`
+          : `${formatCellTitle(value)} — right-click to copy`
+      }
+      onDoubleClick={
+        editable
+          ? () => {
+              setDraft(valueToDraft(value));
+              setEditing(true);
+            }
+          : undefined
+      }
+    >
+      <CellValue value={value} />
+    </div>
+  );
 
   if (!editing) {
-    return (
-      <button
-        type="button"
-        className="block w-full truncate rounded px-2 py-1 text-left hover:bg-accent/10"
-        title={`${formatCellTitle(value)} — double-click to edit`}
-        onDoubleClick={() => {
-          setDraft(valueToDraft(value));
-          setEditing(true);
-        }}
-      >
-        <CellValue value={value} />
-      </button>
-    );
+    return <CellWithCopyMenu value={value}>{display}</CellWithCopyMenu>;
   }
 
   const commit = async () => {
@@ -446,15 +456,18 @@ function EditableCell({
     }
   };
 
+  const lineCount = Math.min(8, Math.max(2, draft.split("\n").length));
+
   return (
-    <div className="flex items-center gap-1 px-1">
-      <input
+    <div className="flex items-start gap-1 px-1 py-0.5">
+      <textarea
         ref={inputRef}
         value={draft}
         disabled={saving}
+        rows={lineCount}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter") {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
             void commit();
           }
@@ -466,18 +479,16 @@ function EditableCell({
         onBlur={() => {
           if (!saving) void commit();
         }}
-        className="h-7 w-full min-w-[6rem] rounded border border-accent/40 bg-panel px-2 font-mono text-xs outline-none focus:ring-2 focus:ring-accent/30"
-        placeholder={column.nullable ? "value or NULL" : "value"}
+        className="w-full min-w-[8rem] resize-y rounded border border-accent/40 bg-panel px-2 py-1 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-accent/30"
+        placeholder={column.nullable ? "value or NULL · Ctrl/Cmd+Enter to save" : "value · Ctrl/Cmd+Enter to save"}
       />
-      {saving && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted" />}
+      {saving && <Loader2 className="mt-1 size-3.5 shrink-0 animate-spin text-muted" />}
     </div>
   );
 }
 
 function valueToDraft(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
+  return rawCellText(value);
 }
 
 function parseEditedValue(raw: string, column: BrowseColumn): unknown {
