@@ -1,5 +1,6 @@
 import { AlertTriangle, Clock3, Rows3 } from "lucide-react";
 import { CellValue, formatCellTitle } from "@/components/CellValue";
+import { CellWithCopyMenu } from "@/components/CellWithCopyMenu";
 import type { QuerySuccess } from "@/lib/api";
 
 type Props = {
@@ -46,7 +47,7 @@ export function ResultsViewer({ result, error, running }: Props) {
 
         {!running && !result && !error && (
           <p className="text-sm text-muted">
-            Run a query to see results here.
+            Run a query to see results here. Right-click any cell to copy its raw value.
           </p>
         )}
 
@@ -104,10 +105,16 @@ function ResultsTable({
                 {columns.map((col) => (
                   <td
                     key={col}
-                    className="max-w-xs truncate border-b border-line/70 px-3 py-1.5 font-mono text-xs text-ink"
-                    title={formatCellTitle(row[col])}
+                    className="max-w-xs border-b border-line/70 px-1 py-0.5 font-mono text-xs text-ink"
                   >
-                    <CellValue value={row[col]} />
+                    <CellWithCopyMenu value={row[col]}>
+                      <div
+                        className="max-h-24 overflow-hidden px-2 py-1"
+                        title={`${formatCellTitle(row[col])} — right-click to copy`}
+                      >
+                        <CellValue value={row[col]} />
+                      </div>
+                    </CellWithCopyMenu>
                   </td>
                 ))}
               </tr>
