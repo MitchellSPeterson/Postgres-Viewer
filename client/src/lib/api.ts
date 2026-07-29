@@ -1,9 +1,28 @@
-export type ConnectionConfig = {
+export type Engine = "postgres" | "sqlite";
+
+export type PostgresConfig = {
+  engine: "postgres";
   host: string;
   port: number;
   database: string;
   username: string;
   password: string;
+};
+
+export type SqliteConfig = {
+  engine: "sqlite";
+  path: string;
+};
+
+export type ConnectionConfig = PostgresConfig | SqliteConfig;
+
+export type SavedConnection = {
+  id: number;
+  name: string;
+  engine: Engine;
+  config: ConnectionConfig;
+  createdAt: number;
+  lastUsedAt: number;
 };
 
 export type QuerySuccess = {
@@ -42,7 +61,8 @@ export type ApiError = {
   error: string;
 };
 
-export const DEFAULT_CONNECTION: ConnectionConfig = {
+export const DEFAULT_POSTGRES: PostgresConfig = {
+  engine: "postgres",
   host: "localhost",
   port: 5432,
   database: "postgres",
@@ -50,37 +70,81 @@ export const DEFAULT_CONNECTION: ConnectionConfig = {
   password: "",
 };
 
+export const DEFAULT_SQLITE: SqliteConfig = {
+  engine: "sqlite",
+  path: "",
+};
+
+export const DEFAULT_CONNECTION: ConnectionConfig = DEFAULT_POSTGRES;
+
+export function connectionLabel(config: ConnectionConfig): string {
+  if (config.engine === "sqlite") {
+    return config.path ? `sqlite:${config.path}` : "sqlite:(no file)";
+  }
+  return `${config.username}@${config.host}:${config.port}/${config.database}`;
+}
+
+export function connectionKey(config: ConnectionConfig): string {
+  if (config.engine === "sqlite") return `sqlite:${config.path}`;
+  return `postgres:${config.username}@${config.host}:${config.port}/${config.database}`;
+}
+
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
 export async function testConnection(
   config: ConnectionConfig,
 ): Promise<{ ok: true; message: string } | ApiError> {
-  const res = await fetch("/api/test-connection", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(config),
-  });
-  return res.json();
+  return postJson("/api/test-connection", config);
 }
 
 export async function runQuery(
   config: ConnectionConfig,
   sql: string,
 ): Promise<QuerySuccess | ApiError> {
-  const res = await fetch("/api/query", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...config, sql }),
-  });
-  return res.json();
+  return postJson("/api/query", { ...config, sql });
 }
 
 export async function browseTables(
   config: ConnectionConfig,
   limit?: number,
 ): Promise<BrowseSuccess | ApiError> {
-  const res = await fetch("/api/browse", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...config, ...(limit !== undefined ? { limit } : {}) }),
+  return postJson("/api/browse", {
+    ...config,
+    ...(limit !== undefined ? { limit } : {}),
   });
+}
+
+export async function listConnections(): Promise<
+  { ok: true; connections: SavedConnection[] } | ApiError
+> {
+  const res = await fetch("/api/connections");
+  return res.json();
+}
+
+export async function saveNamedConnection(
+  name: string,
+  config: ConnectionConfig,
+): Promise<{ ok: true; connection: SavedConnection } | ApiError> {
+  return postJson("/api/connections", { name, ...config });
+}
+
+export async function deleteConnection(
+  id: number,
+): Promise<{ ok: true } | ApiError> {
+  const res = await fetch(`/api/connections/${id}`, { method: "DELETE" });
+  return res.json();
+}
+
+export async function touchConnection(
+  id: number,
+): Promise<{ ok: true; connection: SavedConnection } | ApiError> {
+  const res = await fetch(`/api/connections/${id}?touch=1`, { method: "POST" });
   return res.json();
 }

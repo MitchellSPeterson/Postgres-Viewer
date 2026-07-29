@@ -8,10 +8,13 @@ import { ToastStack, type Toast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_CONNECTION,
+  connectionLabel,
   runQuery,
   testConnection,
+  touchConnection,
   type ConnectionConfig,
   type QuerySuccess,
+  type SavedConnection,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -19,12 +22,11 @@ type ViewMode = "query" | "browse";
 
 export default function App() {
   const [config, setConfig] = useState<ConnectionConfig>(DEFAULT_CONNECTION);
+  const [savedId, setSavedId] = useState<number | null>(null);
   const [connected, setConnected] = useState(false);
   const [testing, setTesting] = useState(false);
   const [view, setView] = useState<ViewMode>("query");
-  const [sql, setSql] = useState(
-    "SELECT table_schema, table_name\nFROM information_schema.tables\nWHERE table_schema NOT IN ('pg_catalog', 'information_schema')\nORDER BY 1, 2\nLIMIT 50;",
-  );
+  const [sql, setSql] = useState(defaultSqlFor(DEFAULT_CONNECTION));
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<QuerySuccess | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +40,28 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  const applyConfig = (next: ConnectionConfig, nextSavedId: number | null = null) => {
+    setConfig(next);
+    setSavedId(nextSavedId);
+    setConnected(false);
+    setSql((prev) => {
+      // Swap starter query when engine changes; keep custom SQL otherwise
+      if (
+        (config.engine !== next.engine) ||
+        prev.trim() === defaultSqlFor(config).trim()
+      ) {
+        return defaultSqlFor(next);
+      }
+      return prev;
+    });
+  };
+
+  const handleLoadedSaved = (saved: SavedConnection) => {
+    applyConfig(saved.config, saved.id);
+    void touchConnection(saved.id);
+    pushToast("success", `Loaded “${saved.name}”`);
+  };
+
   const handleTest = async () => {
     setTesting(true);
     try {
@@ -45,6 +69,7 @@ export default function App() {
       if (res.ok) {
         setConnected(true);
         pushToast("success", "message" in res ? res.message : "Connected successfully");
+        if (savedId !== null) void touchConnection(savedId);
       } else {
         setConnected(false);
         pushToast("error", res.error);
@@ -70,6 +95,7 @@ export default function App() {
         setConnected(true);
         setResult(res);
         setError(null);
+        if (savedId !== null) void touchConnection(savedId);
       } else {
         setResult(null);
         setError(res.error);
@@ -91,7 +117,7 @@ export default function App() {
               <Database className="size-4" />
             </div>
             <h1 className="text-sm font-semibold tracking-tight text-ink">
-              Postgres Web Viewer
+              SQL Web Viewer
             </h1>
           </div>
           <div className="flex items-center rounded-md border border-line bg-surface/70 p-0.5">
@@ -121,15 +147,16 @@ export default function App() {
             </Button>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted">
+        <div className="flex min-w-0 items-center gap-2 text-xs text-muted">
           <span
-            className={`size-2.5 rounded-full ${connected ? "bg-success" : "bg-danger"}`}
+            className={`size-2.5 shrink-0 rounded-full ${connected ? "bg-success" : "bg-danger"}`}
             aria-hidden
           />
-          <span>{connected ? "Connected" : "Disconnected"}</span>
+          <span className="shrink-0">{connected ? "Connected" : "Disconnected"}</span>
           <span className="text-line">·</span>
-          <span className="font-mono">
-            {config.username}@{config.host}:{config.port}/{config.database}
+          <span className="truncate font-mono" title={connectionLabel(config)}>
+            {config.engine === "sqlite" ? "SQLite" : "Postgres"} ·{" "}
+            {connectionLabel(config)}
           </span>
         </div>
       </header>
@@ -137,12 +164,10 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         <ConnectionSidebar
           config={config}
-          onChange={(next) => {
-            setConfig(next);
-            setConnected(false);
-          }}
+          onChange={(next) => applyConfig(next, null)}
           onTest={handleTest}
           testing={testing}
+          onLoadedSaved={handleLoadedSaved}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -165,4 +190,11 @@ export default function App() {
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
+}
+
+function defaultSqlFor(config: ConnectionConfig): string {
+  if (config.engine === "sqlite") {
+    return "SELECT name AS table_name\nFROM sqlite_master\nWHERE type = 'table' AND name NOT LIKE 'sqlite_%'\nORDER BY name;";
+  }
+  return "SELECT table_schema, table_name\nFROM information_schema.tables\nWHERE table_schema NOT IN ('pg_catalog', 'information_schema')\nORDER BY 1, 2\nLIMIT 50;";
 }
