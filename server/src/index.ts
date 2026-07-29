@@ -9,10 +9,19 @@ import {
 import {
   connectionLabel,
   deleteSavedConnection,
+  deleteSnippet,
+  addQueryHistory,
+  clearQueryHistory,
+  getSettings,
   isConnectionConfig,
+  isMutatingSql,
+  listQueryHistory,
   listSavedConnections,
+  listSnippets,
   saveConnection,
+  saveSnippet,
   touchSavedConnection,
+  updateSettings,
   type ConnectionConfig,
 } from "./store";
 
@@ -26,7 +35,7 @@ function json(data: unknown, status = 200): Response {
     headers: {
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
     },
   });
@@ -58,13 +67,75 @@ Bun.serve({
         status: 204,
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+          "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
           "Access-Control-Allow-Headers": "Content-Type",
         },
       });
     }
 
     if (req.method === "GET" && url.pathname === "/api/health") {
+      return json({ ok: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/settings") {
+      return json({ ok: true, settings: getSettings() });
+    }
+
+    if (req.method === "PATCH" && url.pathname === "/api/settings") {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ ok: false, error: "Invalid JSON body" }, 400);
+      }
+      if (!body || typeof body !== "object") {
+        return json({ ok: false, error: "Invalid request body" }, 400);
+      }
+      const { darkMode, safeMode } = body as Record<string, unknown>;
+      const patch: { darkMode?: boolean; safeMode?: boolean } = {};
+      if (typeof darkMode === "boolean") patch.darkMode = darkMode;
+      if (typeof safeMode === "boolean") patch.safeMode = safeMode;
+      return json({ ok: true, settings: updateSettings(patch) });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/history") {
+      return json({ ok: true, history: listQueryHistory() });
+    }
+
+    if (req.method === "DELETE" && url.pathname === "/api/history") {
+      clearQueryHistory();
+      return json({ ok: true });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/snippets") {
+      return json({ ok: true, snippets: listSnippets() });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/snippets") {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ ok: false, error: "Invalid JSON body" }, 400);
+      }
+      if (!body || typeof body !== "object") {
+        return json({ ok: false, error: "Invalid request body" }, 400);
+      }
+      const { name, sql: snippetSql } = body as Record<string, unknown>;
+      if (typeof name !== "string" || !name.trim()) {
+        return json({ ok: false, error: "Snippet name is required" }, 400);
+      }
+      if (typeof snippetSql !== "string" || !snippetSql.trim()) {
+        return json({ ok: false, error: "Snippet SQL is required" }, 400);
+      }
+      return json({ ok: true, snippet: saveSnippet(name, snippetSql) });
+    }
+
+    const snippetMatch = url.pathname.match(/^\/api\/snippets\/(\d+)$/);
+    if (snippetMatch && req.method === "DELETE") {
+      const id = Number(snippetMatch[1]);
+      const deleted = deleteSnippet(id);
+      if (!deleted) return json({ ok: false, error: "Snippet not found" }, 404);
       return json({ ok: true });
     }
 
@@ -161,12 +232,47 @@ Bun.serve({
         return json({ ok: false, error: "Missing or invalid connection fields" }, 400);
       }
 
+      const settings = getSettings();
+      if (settings.safeMode && isMutatingSql(queryText)) {
+        addQueryHistory({
+          sql: queryText,
+          engine: config.engine,
+          connectionLabel: connectionLabel(config),
+          ok: false,
+          error: "Blocked by Safe Mode (read-only)",
+        });
+        return json(
+          {
+            ok: false,
+            error:
+              "Safe Mode is on — INSERT, UPDATE, DELETE, and other write/DDL statements are blocked.",
+          },
+          403,
+        );
+      }
+
       try {
         const result = await runTargetQuery(config, queryText);
         if (typeof savedId === "number") touchSavedConnection(savedId);
+        addQueryHistory({
+          sql: queryText,
+          engine: config.engine,
+          connectionLabel: connectionLabel(config),
+          ok: true,
+          rowCount: result.rowCount,
+          durationMs: result.durationMs,
+        });
         return json({ ok: true, ...result });
       } catch (err) {
-        return json({ ok: false, error: formatError(err, "Query failed") }, 400);
+        const message = formatError(err, "Query failed");
+        addQueryHistory({
+          sql: queryText,
+          engine: config.engine,
+          connectionLabel: connectionLabel(config),
+          ok: false,
+          error: message,
+        });
+        return json({ ok: false, error: message }, 400);
       }
     }
 
@@ -265,6 +371,16 @@ Bun.serve({
       const config = extractConfig(rest);
       if (!config) {
         return json({ ok: false, error: "Missing or invalid connection fields" }, 400);
+      }
+
+      if (getSettings().safeMode) {
+        return json(
+          {
+            ok: false,
+            error: "Safe Mode is on — cell edits are disabled.",
+          },
+          403,
+        );
       }
 
       try {

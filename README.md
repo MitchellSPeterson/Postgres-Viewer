@@ -39,6 +39,8 @@ bun run dev:client   # http://localhost:5173
 - Query editor with Cmd/Ctrl+Enter
 - Browse Tables view (collapse tables / hide columns; double-click cells to edit when a primary key exists; right-click to copy raw values with newlines preserved)
 - Save and reopen past connections (including passwords for local convenience)
+- Settings: dark mode + Safe Mode (server-enforced read-only)
+- Query history and saved snippets
 - Inspect SQLite `.db` / `.sqlite` files via bun:sqlite
 
 ## API
@@ -50,6 +52,10 @@ bun run dev:client   # http://localhost:5173
 | `/api/browse` | POST | connection config — returns table/column/PK metadata only |
 | `/api/table-rows` | POST | connection config + `{ schema, table, limit? }` — lazy row load |
 | `/api/update-cell` | POST | connection config + `{ schema, table, column, value, primaryKey }` |
+| `/api/settings` | GET/PATCH | `{ darkMode?, safeMode? }` |
+| `/api/history` | GET/DELETE | query history |
+| `/api/snippets` | GET/POST | saved SQL snippets |
+| `/api/snippets/:id` | DELETE | delete snippet |
 | `/api/connections` | GET | list saved connections |
 | `/api/connections` | POST | `{ name, ...config }` |
 | `/api/connections/:id` | DELETE | delete saved connection |

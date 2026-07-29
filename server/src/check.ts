@@ -3,7 +3,12 @@
  * Ceiling: does not spin up Bun.serve or talk to Postgres.
  */
 import { Database } from "bun:sqlite";
-import { isConnectionConfig, isPostgresConfig, isSqliteConfig } from "./store";
+import {
+  isConnectionConfig,
+  isMutatingSql,
+  isPostgresConfig,
+  isSqliteConfig,
+} from "./store";
 
 const goodPg = {
   engine: "postgres" as const,
@@ -29,6 +34,10 @@ console.assert(
 );
 console.assert(isSqliteConfig({ engine: "sqlite", path: "" }) === false, "empty path accepted");
 console.assert(isConnectionConfig({}) === false, "empty object accepted");
+console.assert(isMutatingSql("SELECT 1") === false, "select flagged");
+console.assert(isMutatingSql("UPDATE users SET x=1") === true, "update missed");
+console.assert(isMutatingSql("/* c */ DELETE FROM t") === true, "delete missed");
+console.assert(isMutatingSql("SELECT 1; DROP TABLE t") === true, "multi missed");
 
 // Create a tiny sqlite file and browse-ish query it
 const demoPath = `/tmp/pgviewer-check-${Date.now()}.sqlite`;

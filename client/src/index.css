@@ -17,6 +17,20 @@
   --color-success-bg: #ecfdf3;
 }
 
+html.dark {
+  --color-surface: #12161c;
+  --color-panel: #1a212b;
+  --color-ink: #e8eef5;
+  --color-muted: #9aa8b8;
+  --color-line: #2c3644;
+  --color-accent: #2dd4bf;
+  --color-accent-hover: #5eead4;
+  --color-danger: #f97066;
+  --color-danger-bg: #3b1a1a;
+  --color-success: #47cd89;
+  --color-success-bg: #123526;
+}
+
 html,
 body,
 #root {
@@ -28,14 +42,15 @@ body {
   font-family: var(--font-sans);
   color: var(--color-ink);
   background:
-    radial-gradient(1200px 600px at 0% -10%, #dbe7ef 0%, transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, #e8f2ef 0%, transparent 50%),
+    radial-gradient(1200px 600px at 0% -10%, color-mix(in srgb, var(--color-accent) 18%, transparent) 0%, transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, color-mix(in srgb, var(--color-line) 55%, transparent) 0%, transparent 50%),
     var(--color-surface);
 }
 
 button:not(:disabled),
 [role="button"]:not([aria-disabled="true"]),
 [role="menuitem"],
+[role="switch"],
 summary {
   cursor: pointer;
 }

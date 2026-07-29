@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 type Props = {
   config: ConnectionConfig;
   active: boolean;
+  safeMode?: boolean;
 };
 
 type TableData = {
@@ -39,7 +40,7 @@ type TableData = {
 
 const ROW_LIMIT = 100;
 
-export function TablesBrowser({ config, active }: Props) {
+export function TablesBrowser({ config, active, safeMode = false }: Props) {
   const [tables, setTables] = useState<BrowseTableMeta[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -205,6 +206,7 @@ export function TablesBrowser({ config, active }: Props) {
           <h2 className="text-sm font-semibold text-ink">Tables</h2>
           <p className="text-xs text-muted">
             Expand a table to load its rows. Double-click to edit, right-click to copy.
+            {safeMode ? " Safe Mode is on — edits disabled." : ""}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -263,7 +265,7 @@ export function TablesBrowser({ config, active }: Props) {
             const isOpen = Boolean(expanded[tKey]);
             const hidden = hiddenColumns[tKey] ?? new Set<string>();
             const visibleColumns = table.columns.filter((c) => !hidden.has(c.name));
-            const editable = table.primaryKey.length > 0;
+            const editable = table.primaryKey.length > 0 && !safeMode;
             const data = tableData[tKey];
             const rowsLoading = Boolean(loadingRows[tKey]);
             const rowError = rowErrors[tKey];
@@ -318,7 +320,9 @@ export function TablesBrowser({ config, active }: Props) {
                   <div className="border-t border-line px-3 py-3">
                     {!editable && (
                       <p className="mb-2 text-xs text-muted">
-                        No primary key — cells can’t be edited safely.
+                        {safeMode
+                          ? "Safe Mode is on — cells are read-only."
+                          : "No primary key — cells can’t be edited safely."}
                       </p>
                     )}
                     <div className="mb-3 flex flex-wrap gap-1.5">
