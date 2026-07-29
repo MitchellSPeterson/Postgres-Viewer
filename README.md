@@ -24,7 +24,10 @@ Open http://localhost:5173. Defaults assume a local Postgres (e.g. Apptainer): `
 |----------|--------|------|
 | `/api/test-connection` | POST | `{ host, port, database, username, password }` |
 | `/api/query` | POST | connection fields + `{ sql }` |
+| `/api/browse` | POST | connection fields + optional `{ limit }` (default 500, max 5000 rows per table) |
 | `/api/health` | GET | — |
+
+The **Browse Tables** view loads every user table (with columns + rows) so you can expand/collapse tables and hide columns for a dense overview.
 
 Credentials are sent with each request and used only to open a short-lived connection; they are not stored on the server.
 

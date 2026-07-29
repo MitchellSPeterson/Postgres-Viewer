@@ -1,4 +1,5 @@
 import { AlertTriangle, Clock3, Rows3 } from "lucide-react";
+import { CellValue, formatCellTitle } from "@/components/CellValue";
 import type { QuerySuccess } from "@/lib/api";
 
 type Props = {
@@ -116,20 +117,4 @@ function ResultsTable({
       </table>
     </div>
   );
-}
-
-function CellValue({ value }: { value: unknown }) {
-  if (value === null || value === undefined) {
-    return <span className="rounded bg-line/60 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted/80">NULL</span>;
-  }
-  if (typeof value === "object") {
-    return <span>{JSON.stringify(value)}</span>;
-  }
-  return <span>{String(value)}</span>;
-}
-
-function formatCellTitle(value: unknown): string {
-  if (value === null || value === undefined) return "NULL";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
 }

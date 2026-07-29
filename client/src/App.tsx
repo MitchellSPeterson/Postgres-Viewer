@@ -3,7 +3,9 @@ import { Database } from "lucide-react";
 import { ConnectionSidebar } from "@/components/ConnectionSidebar";
 import { QueryEditor } from "@/components/QueryEditor";
 import { ResultsViewer } from "@/components/ResultsViewer";
+import { TablesBrowser } from "@/components/TablesBrowser";
 import { ToastStack, type Toast } from "@/components/Toast";
+import { Button } from "@/components/ui/button";
 import {
   DEFAULT_CONNECTION,
   runQuery,
@@ -11,11 +13,15 @@ import {
   type ConnectionConfig,
   type QuerySuccess,
 } from "@/lib/api";
+import { cn } from "@/lib/utils";
+
+type ViewMode = "query" | "browse";
 
 export default function App() {
   const [config, setConfig] = useState<ConnectionConfig>(DEFAULT_CONNECTION);
   const [connected, setConnected] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [view, setView] = useState<ViewMode>("query");
   const [sql, setSql] = useState(
     "SELECT table_schema, table_name\nFROM information_schema.tables\nWHERE table_schema NOT IN ('pg_catalog', 'information_schema')\nORDER BY 1, 2\nLIMIT 50;",
   );
@@ -78,14 +84,42 @@ export default function App() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-line bg-panel/90 px-4 backdrop-blur-sm">
-        <div className="flex items-center gap-2.5">
-          <div className="flex size-7 items-center justify-center rounded-md bg-accent text-white">
-            <Database className="size-4" />
+      <header className="flex h-12 shrink-0 items-center justify-between gap-4 border-b border-line bg-panel/90 px-4 backdrop-blur-sm">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex size-7 items-center justify-center rounded-md bg-accent text-white">
+              <Database className="size-4" />
+            </div>
+            <h1 className="text-sm font-semibold tracking-tight text-ink">
+              Postgres Web Viewer
+            </h1>
           </div>
-          <h1 className="text-sm font-semibold tracking-tight text-ink">
-            Postgres Web Viewer
-          </h1>
+          <div className="flex items-center rounded-md border border-line bg-surface/70 p-0.5">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className={cn(
+                "h-7 px-3",
+                view === "query" && "bg-panel text-ink shadow-sm",
+              )}
+              onClick={() => setView("query")}
+            >
+              Query
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className={cn(
+                "h-7 px-3",
+                view === "browse" && "bg-panel text-ink shadow-sm",
+              )}
+              onClick={() => setView("browse")}
+            >
+              Browse Tables
+            </Button>
+          </div>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted">
           <span
@@ -112,13 +146,19 @@ export default function App() {
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <QueryEditor
-            value={sql}
-            onChange={setSql}
-            onExecute={handleExecute}
-            running={running}
-          />
-          <ResultsViewer result={result} error={error} running={running} />
+          {view === "query" ? (
+            <>
+              <QueryEditor
+                value={sql}
+                onChange={setSql}
+                onExecute={handleExecute}
+                running={running}
+              />
+              <ResultsViewer result={result} error={error} running={running} />
+            </>
+          ) : (
+            <TablesBrowser config={config} active={view === "browse"} />
+          )}
         </main>
       </div>
 
