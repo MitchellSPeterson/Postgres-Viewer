@@ -3,6 +3,7 @@
   "private": true,
   "workspaces": ["server", "client"],
   "scripts": {
+    "dev": "bun run scripts/dev.ts",
     "dev:server": "bun run --cwd server dev",
     "dev:client": "bun run --cwd client dev",
     "build": "bun run --cwd client build",

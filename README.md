@@ -13,11 +13,23 @@ Lightweight local alternative to pgAdmin: connect to PostgreSQL or open SQLite f
 
 ```bash
 bun install
+bun run dev
+```
+
+That one command starts the API and Vite client together. It picks the first open ports near `3001` (API) and `5173` (client), wires the Vite `/api` proxy to the API port, and prints both URLs.
+
+Optional overrides:
+
+```bash
+API_PORT=3010 CLIENT_PORT=5180 bun run dev
+```
+
+Or run processes separately:
+
+```bash
 bun run dev:server   # http://localhost:3001
 bun run dev:client   # http://localhost:5173
 ```
-
-Open http://localhost:5173.
 
 - **PostgreSQL** defaults assume a local instance (e.g. Apptainer): `localhost:5432`, user `postgres`
 - **SQLite** accepts an absolute file path on the machine running the Bun server
