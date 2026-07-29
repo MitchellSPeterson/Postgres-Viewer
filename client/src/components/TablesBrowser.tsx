@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertTriangle,
   ChevronDown,
@@ -16,9 +16,10 @@ import { CellWithCopyMenu } from "@/components/CellWithCopyMenu";
 import {
   browseTables,
   connectionKey,
+  fetchTableRows,
   updateTableCell,
   type BrowseColumn,
-  type BrowseTable,
+  type BrowseTableMeta,
   type ConnectionConfig,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -28,19 +29,31 @@ type Props = {
   active: boolean;
 };
 
+type TableData = {
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  totalRows: number;
+  truncated: boolean;
+  limit: number;
+};
+
+const ROW_LIMIT = 100;
+
 export function TablesBrowser({ config, active }: Props) {
-  const [tables, setTables] = useState<BrowseTable[]>([]);
+  const [tables, setTables] = useState<BrowseTableMeta[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [durationMs, setDurationMs] = useState<number | null>(null);
-  const [limit, setLimit] = useState<number | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [hiddenColumns, setHiddenColumns] = useState<Record<string, Set<string>>>({});
+  const [tableData, setTableData] = useState<Record<string, TableData>>({});
+  const [loadingRows, setLoadingRows] = useState<Record<string, boolean>>({});
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [editError, setEditError] = useState<string | null>(null);
 
   const key = connectionKey(config);
 
-  const load = async () => {
+  const loadMeta = async () => {
     setLoading(true);
     setError(null);
     setEditError(null);
@@ -50,48 +63,93 @@ export function TablesBrowser({ config, active }: Props) {
         setTables([]);
         setError(res.error);
         setDurationMs(null);
-        setLimit(null);
         return;
       }
 
       setTables(res.tables);
       setDurationMs(res.durationMs);
-      setLimit(res.limit);
-
-      const nextExpanded: Record<string, boolean> = {};
-      for (const table of res.tables) {
-        nextExpanded[tableKey(table)] = true;
-      }
-      setExpanded(nextExpanded);
+      setExpanded({});
       setHiddenColumns({});
+      setTableData({});
+      setLoadingRows({});
+      setRowErrors({});
     } catch (err) {
       setTables([]);
       setError(err instanceof Error ? err.message : "Failed to reach API server");
       setDurationMs(null);
-      setLimit(null);
     } finally {
       setLoading(false);
     }
   };
 
+  const loadRows = async (table: BrowseTableMeta, force = false) => {
+    const tKey = tableKey(table);
+    if (!force && tableData[tKey]) return;
+
+    setLoadingRows((prev) => ({ ...prev, [tKey]: true }));
+    setRowErrors((prev) => {
+      const next = { ...prev };
+      delete next[tKey];
+      return next;
+    });
+
+    try {
+      const res = await fetchTableRows(config, table.schema, table.name, ROW_LIMIT);
+      if (!res.ok) {
+        setRowErrors((prev) => ({ ...prev, [tKey]: res.error }));
+        return;
+      }
+      setTableData((prev) => ({
+        ...prev,
+        [tKey]: {
+          rows: res.rows,
+          rowCount: res.rowCount,
+          totalRows: res.totalRows,
+          truncated: res.truncated,
+          limit: res.limit,
+        },
+      }));
+    } catch (err) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [tKey]: err instanceof Error ? err.message : "Failed to load rows",
+      }));
+    } finally {
+      setLoadingRows((prev) => ({ ...prev, [tKey]: false }));
+    }
+  };
+
   useEffect(() => {
     if (!active) return;
-    void load();
+    void loadMeta();
   }, [active, key]);
 
   const allExpanded =
     tables.length > 0 && tables.every((t) => expanded[tableKey(t)]);
 
   const toggleAllTables = () => {
+    if (allExpanded) {
+      setExpanded({});
+      return;
+    }
     const next: Record<string, boolean> = {};
     for (const table of tables) {
-      next[tableKey(table)] = !allExpanded;
+      const tKey = tableKey(table);
+      next[tKey] = true;
+      void loadRows(table);
     }
     setExpanded(next);
   };
 
+  const toggleTable = (table: BrowseTableMeta) => {
+    const tKey = tableKey(table);
+    const willOpen = !expanded[tKey];
+    setExpanded((prev) => ({ ...prev, [tKey]: willOpen }));
+    if (willOpen) void loadRows(table);
+  };
+
   const handleCellSave = async (args: {
-    table: BrowseTable;
+    table: BrowseTableMeta;
     rowIndex: number;
     column: BrowseColumn;
     raw: string;
@@ -101,7 +159,9 @@ export function TablesBrowser({ config, active }: Props) {
       throw new Error("This table has no primary key, so cells are read-only");
     }
 
-    const row = table.rows[rowIndex];
+    const tKey = tableKey(table);
+    const data = tableData[tKey];
+    const row = data?.rows[rowIndex];
     if (!row) throw new Error("Row not found");
 
     const nextValue = parseEditedValue(raw, column);
@@ -122,17 +182,19 @@ export function TablesBrowser({ config, active }: Props) {
     });
     if (!res.ok) throw new Error(res.error);
 
-    setTables((prev) =>
-      prev.map((t) => {
-        if (tableKey(t) !== tableKey(table)) return t;
-        return {
-          ...t,
-          rows: t.rows.map((r, i) =>
+    setTableData((prev) => {
+      const currentData = prev[tKey];
+      if (!currentData) return prev;
+      return {
+        ...prev,
+        [tKey]: {
+          ...currentData,
+          rows: currentData.rows.map((r, i) =>
             i === rowIndex ? { ...r, [column.name]: nextValue } : r,
           ),
-        };
-      }),
-    );
+        },
+      };
+    });
     setEditError(null);
   };
 
@@ -142,16 +204,14 @@ export function TablesBrowser({ config, active }: Props) {
         <div>
           <h2 className="text-sm font-semibold text-ink">Tables</h2>
           <p className="text-xs text-muted">
-            Browse and edit cells. Double-click to edit, right-click to copy the raw value
-            (newlines preserved).
+            Expand a table to load its rows. Double-click to edit, right-click to copy.
           </p>
         </div>
         <div className="flex items-center gap-2">
           {durationMs !== null && (
             <span className="text-xs text-muted">
               {tables.length} table{tables.length === 1 ? "" : "s"}
-              {limit !== null ? ` · up to ${limit} rows each` : ""}
-              {` · ${durationMs} ms`}
+              {` · meta ${durationMs} ms`}
             </span>
           )}
           <Button
@@ -162,7 +222,7 @@ export function TablesBrowser({ config, active }: Props) {
           >
             {allExpanded ? "Collapse all" : "Expand all"}
           </Button>
-          <Button size="sm" onClick={() => void load()} disabled={loading}>
+          <Button size="sm" onClick={() => void loadMeta()} disabled={loading}>
             {loading ? (
               <Loader2 className="size-3.5 animate-spin" />
             ) : (
@@ -189,7 +249,7 @@ export function TablesBrowser({ config, active }: Props) {
         {loading && tables.length === 0 && (
           <p className="flex items-center gap-2 text-sm text-muted">
             <Loader2 className="size-4 animate-spin" />
-            Loading tables…
+            Loading table list…
           </p>
         )}
 
@@ -204,6 +264,9 @@ export function TablesBrowser({ config, active }: Props) {
             const hidden = hiddenColumns[tKey] ?? new Set<string>();
             const visibleColumns = table.columns.filter((c) => !hidden.has(c.name));
             const editable = table.primaryKey.length > 0;
+            const data = tableData[tKey];
+            const rowsLoading = Boolean(loadingRows[tKey]);
+            const rowError = rowErrors[tKey];
 
             return (
               <article
@@ -212,10 +275,8 @@ export function TablesBrowser({ config, active }: Props) {
               >
                 <button
                   type="button"
-                  className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-surface/70"
-                  onClick={() =>
-                    setExpanded((prev) => ({ ...prev, [tKey]: !prev[tKey] }))
-                  }
+                  className="flex w-full cursor-pointer items-center gap-2 px-3 py-2.5 text-left hover:bg-surface/70"
+                  onClick={() => toggleTable(table)}
                   aria-expanded={isOpen}
                 >
                   {isOpen ? (
@@ -242,12 +303,14 @@ export function TablesBrowser({ config, active }: Props) {
                       <Columns3 className="size-3.5" />
                       {table.columns.length}
                     </span>
-                    <span className="inline-flex items-center gap-1">
-                      <Rows3 className="size-3.5" />
-                      {table.truncated
-                        ? `${table.rowCount} of ${table.totalRows}`
-                        : table.totalRows}
-                    </span>
+                    {data && (
+                      <span className="inline-flex items-center gap-1">
+                        <Rows3 className="size-3.5" />
+                        {data.truncated
+                          ? `${data.rowCount} of ${data.totalRows}`
+                          : data.totalRows}
+                      </span>
+                    )}
                   </span>
                 </button>
 
@@ -268,7 +331,7 @@ export function TablesBrowser({ config, active }: Props) {
                             type="button"
                             title={`${col.dataType}${col.nullable ? ", nullable" : ""}${isPk ? ", primary key" : ""}`}
                             className={cn(
-                              "rounded border px-2 py-0.5 font-mono text-[11px] transition-colors",
+                              "cursor-pointer rounded border px-2 py-0.5 font-mono text-[11px] transition-colors",
                               isHidden
                                 ? "border-dashed border-line bg-surface text-muted line-through"
                                 : "border-line bg-panel text-ink hover:border-accent/40",
@@ -294,17 +357,33 @@ export function TablesBrowser({ config, active }: Props) {
                       })}
                     </div>
 
-                    {table.truncated && (
-                      <p className="mb-2 text-xs text-muted">
-                        Showing first {table.rowCount} of {table.totalRows} rows.
+                    {rowsLoading && (
+                      <p className="mb-2 flex items-center gap-2 text-sm text-muted">
+                        <Loader2 className="size-4 animate-spin" />
+                        Loading rows…
                       </p>
                     )}
 
-                    {visibleColumns.length === 0 ? (
+                    {rowError && (
+                      <div className="mb-2 flex gap-2 rounded-md border border-danger/25 bg-danger-bg px-3 py-2 text-sm text-danger">
+                        <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                        <pre className="whitespace-pre-wrap font-mono text-xs">{rowError}</pre>
+                      </div>
+                    )}
+
+                    {data?.truncated && (
+                      <p className="mb-2 text-xs text-muted">
+                        Showing first {data.rowCount} of {data.totalRows} rows.
+                      </p>
+                    )}
+
+                    {data && !rowsLoading && visibleColumns.length === 0 && (
                       <p className="text-sm text-muted">
                         All columns are hidden. Click a column chip above to show it.
                       </p>
-                    ) : (
+                    )}
+
+                    {data && !rowsLoading && visibleColumns.length > 0 && (
                       <div className="overflow-auto rounded-md border border-line">
                         <table className="min-w-full border-collapse text-left text-sm">
                           <thead className="sticky top-0 bg-surface/95 backdrop-blur">
@@ -315,13 +394,13 @@ export function TablesBrowser({ config, active }: Props) {
                                   className="border-b border-line px-3 py-2 font-mono text-xs font-semibold tracking-wide text-muted"
                                 >
                                   <div>
-                                  {table.primaryKey.includes(col.name) ? (
-                                    <span className="mr-1 text-[9px] font-semibold text-accent">
-                                      PK
-                                    </span>
-                                  ) : null}
-                                  {col.name}
-                                </div>
+                                    {table.primaryKey.includes(col.name) ? (
+                                      <span className="mr-1 text-[9px] font-semibold text-accent">
+                                        PK
+                                      </span>
+                                    ) : null}
+                                    {col.name}
+                                  </div>
                                   <div className="font-normal text-[10px] text-muted/70">
                                     {col.dataType}
                                   </div>
@@ -330,7 +409,7 @@ export function TablesBrowser({ config, active }: Props) {
                             </tr>
                           </thead>
                           <tbody>
-                            {table.rows.length === 0 ? (
+                            {data.rows.length === 0 ? (
                               <tr>
                                 <td
                                   colSpan={visibleColumns.length}
@@ -340,7 +419,7 @@ export function TablesBrowser({ config, active }: Props) {
                                 </td>
                               </tr>
                             ) : (
-                              table.rows.map((row, rowIndex) => (
+                              data.rows.map((row, rowIndex) => (
                                 <tr
                                   key={rowIndex}
                                   className="odd:bg-panel even:bg-surface/40"
@@ -406,15 +485,15 @@ function EditableCell({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [inputEl, setInputEl] = useState<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
-    if (editing) {
-      inputRef.current?.focus();
-      const len = inputRef.current?.value.length ?? 0;
-      inputRef.current?.setSelectionRange(len, len);
+    if (editing && inputEl) {
+      inputEl.focus();
+      const len = inputEl.value.length;
+      inputEl.setSelectionRange(len, len);
     }
-  }, [editing]);
+  }, [editing, inputEl]);
 
   const display = (
     <div
@@ -430,7 +509,7 @@ function EditableCell({
       onDoubleClick={
         editable
           ? () => {
-              setDraft(valueToDraft(value));
+              setDraft(rawCellText(value));
               setEditing(true);
             }
           : undefined
@@ -461,7 +540,7 @@ function EditableCell({
   return (
     <div className="flex items-start gap-1 px-1 py-0.5">
       <textarea
-        ref={inputRef}
+        ref={setInputEl}
         value={draft}
         disabled={saving}
         rows={lineCount}
@@ -480,15 +559,15 @@ function EditableCell({
           if (!saving) void commit();
         }}
         className="w-full min-w-[8rem] resize-y rounded border border-accent/40 bg-panel px-2 py-1 font-mono text-xs leading-relaxed outline-none focus:ring-2 focus:ring-accent/30"
-        placeholder={column.nullable ? "value or NULL · Ctrl/Cmd+Enter to save" : "value · Ctrl/Cmd+Enter to save"}
+        placeholder={
+          column.nullable
+            ? "value or NULL · Ctrl/Cmd+Enter to save"
+            : "value · Ctrl/Cmd+Enter to save"
+        }
       />
       {saving && <Loader2 className="mt-1 size-3.5 shrink-0 animate-spin text-muted" />}
     </div>
   );
-}
-
-function valueToDraft(value: unknown): string {
-  return rawCellText(value);
 }
 
 function parseEditedValue(raw: string, column: BrowseColumn): unknown {
@@ -542,6 +621,6 @@ function valuesEqual(a: unknown, b: unknown): boolean {
   return String(a) === String(b);
 }
 
-function tableKey(table: BrowseTable): string {
+function tableKey(table: BrowseTableMeta): string {
   return `${table.schema}.${table.name}`;
 }

@@ -7,30 +7,49 @@ import { TablesBrowser } from "@/components/TablesBrowser";
 import { ToastStack, type Toast } from "@/components/Toast";
 import { Button } from "@/components/ui/button";
 import {
-  DEFAULT_CONNECTION,
+  DEFAULT_POSTGRES,
+  DEFAULT_SQLITE,
   connectionLabel,
   runQuery,
   testConnection,
   touchConnection,
   type ConnectionConfig,
+  type Engine,
+  type PostgresConfig,
   type QuerySuccess,
   type SavedConnection,
+  type SqliteConfig,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type ViewMode = "query" | "browse";
 
+type Drafts = {
+  postgres: PostgresConfig;
+  sqlite: SqliteConfig;
+};
+
 export default function App() {
-  const [config, setConfig] = useState<ConnectionConfig>(DEFAULT_CONNECTION);
+  const [engine, setEngine] = useState<Engine>("postgres");
+  const [drafts, setDrafts] = useState<Drafts>({
+    postgres: DEFAULT_POSTGRES,
+    sqlite: DEFAULT_SQLITE,
+  });
+  const draft = drafts[engine];
+
+  // Live connection used by Query/Browse — unchanged when flipping engine tabs.
+  const [live, setLive] = useState<ConnectionConfig | null>(null);
   const [savedId, setSavedId] = useState<number | null>(null);
   const [connected, setConnected] = useState(false);
-  const [testing, setTesting] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [view, setView] = useState<ViewMode>("query");
-  const [sql, setSql] = useState(defaultSqlFor(DEFAULT_CONNECTION));
+  const [sql, setSql] = useState(defaultSqlFor(DEFAULT_POSTGRES));
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<QuerySuccess | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const active = live ?? draft;
 
   const pushToast = (type: Toast["type"], message: string) => {
     setToasts((prev) => [...prev, { id: Date.now() + Math.random(), type, message }]);
@@ -40,49 +59,72 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const applyConfig = (next: ConnectionConfig, nextSavedId: number | null = null) => {
-    setConfig(next);
-    setSavedId(nextSavedId);
-    setConnected(false);
+  const updateDraft = (next: ConnectionConfig) => {
+    setDrafts((prev) =>
+      next.engine === "postgres"
+        ? { ...prev, postgres: next }
+        : { ...prev, sqlite: next },
+    );
+  };
+
+  const handleEngineChange = (nextEngine: Engine) => {
+    if (nextEngine === engine) return;
+    setEngine(nextEngine);
+    // Only swap the starter query if the editor still has the previous default.
     setSql((prev) => {
-      // Swap starter query when engine changes; keep custom SQL otherwise
-      if (
-        (config.engine !== next.engine) ||
-        prev.trim() === defaultSqlFor(config).trim()
-      ) {
-        return defaultSqlFor(next);
+      if (prev.trim() === defaultSqlFor(draft).trim()) {
+        return defaultSqlFor(drafts[nextEngine]);
       }
       return prev;
     });
   };
 
-  const handleLoadedSaved = (saved: SavedConnection) => {
-    applyConfig(saved.config, saved.id);
-    void touchConnection(saved.id);
-    pushToast("success", `Loaded “${saved.name}”`);
-  };
-
-  const handleTest = async () => {
-    setTesting(true);
+  const connectWith = async (
+    config: ConnectionConfig,
+    options?: { savedId?: number | null; label?: string },
+  ) => {
+    setConnecting(true);
     try {
       const res = await testConnection(config);
       if (res.ok) {
+        setLive(config);
         setConnected(true);
-        pushToast("success", "message" in res ? res.message : "Connected successfully");
-        if (savedId !== null) void touchConnection(savedId);
+        setSavedId(options?.savedId ?? null);
+        updateDraft(config);
+        setEngine(config.engine);
+        setSql((prev) => {
+          const previousDefault = defaultSqlFor(active);
+          if (prev.trim() === previousDefault.trim()) return defaultSqlFor(config);
+          return prev;
+        });
+        pushToast(
+          "success",
+          options?.label
+            ? `Connected to “${options.label}”`
+            : "message" in res
+              ? res.message
+              : "Connected successfully",
+        );
+        if (options?.savedId != null) void touchConnection(options.savedId);
       } else {
-        setConnected(false);
         pushToast("error", res.error);
       }
     } catch (err) {
-      setConnected(false);
       pushToast(
         "error",
         err instanceof Error ? err.message : "Failed to reach API server",
       );
     } finally {
-      setTesting(false);
+      setConnecting(false);
     }
+  };
+
+  const handleConnect = () => void connectWith(draft, { savedId });
+
+  const handleSelectSaved = (saved: SavedConnection) => {
+    updateDraft(saved.config);
+    setEngine(saved.config.engine);
+    void connectWith(saved.config, { savedId: saved.id, label: saved.name });
   };
 
   const handleExecute = async () => {
@@ -90,8 +132,9 @@ export default function App() {
     setRunning(true);
     setError(null);
     try {
-      const res = await runQuery(config, sql);
+      const res = await runQuery(active, sql);
       if (res.ok) {
+        setLive(active);
         setConnected(true);
         setResult(res);
         setError(null);
@@ -107,6 +150,8 @@ export default function App() {
       setRunning(false);
     }
   };
+
+  const headerConfig = live ?? draft;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -149,25 +194,28 @@ export default function App() {
         </div>
         <div className="flex min-w-0 items-center gap-2 text-xs text-muted">
           <span
-            className={`size-2.5 shrink-0 rounded-full ${connected ? "bg-success" : "bg-danger"}`}
+            className={`size-2.5 shrink-0 rounded-full ${connected && live ? "bg-success" : "bg-danger"}`}
             aria-hidden
           />
-          <span className="shrink-0">{connected ? "Connected" : "Disconnected"}</span>
+          <span className="shrink-0">
+            {connected && live ? "Connected" : "Disconnected"}
+          </span>
           <span className="text-line">·</span>
-          <span className="truncate font-mono" title={connectionLabel(config)}>
-            {config.engine === "sqlite" ? "SQLite" : "Postgres"} ·{" "}
-            {connectionLabel(config)}
+          <span className="truncate font-mono" title={connectionLabel(headerConfig)}>
+            {headerConfig.engine === "sqlite" ? "SQLite" : "Postgres"} ·{" "}
+            {connectionLabel(headerConfig)}
           </span>
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
         <ConnectionSidebar
-          config={config}
-          onChange={(next) => applyConfig(next, null)}
-          onTest={handleTest}
-          testing={testing}
-          onLoadedSaved={handleLoadedSaved}
+          config={draft}
+          onChange={updateDraft}
+          onEngineChange={handleEngineChange}
+          onConnect={handleConnect}
+          connecting={connecting}
+          onSelectSaved={handleSelectSaved}
         />
 
         <main className="flex min-w-0 flex-1 flex-col">
@@ -182,7 +230,7 @@ export default function App() {
               <ResultsViewer result={result} error={error} running={running} />
             </>
           ) : (
-            <TablesBrowser config={config} active={view === "browse"} />
+            <TablesBrowser config={active} active={view === "browse"} />
           )}
         </main>
       </div>

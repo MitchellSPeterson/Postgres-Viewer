@@ -47,7 +47,8 @@ bun run dev:client   # http://localhost:5173
 |----------|--------|------|
 | `/api/test-connection` | POST | connection config (`engine: "postgres" \| "sqlite"`) |
 | `/api/query` | POST | connection config + `{ sql }` |
-| `/api/browse` | POST | connection config + optional `{ limit }` |
+| `/api/browse` | POST | connection config — returns table/column/PK metadata only |
+| `/api/table-rows` | POST | connection config + `{ schema, table, limit? }` — lazy row load |
 | `/api/update-cell` | POST | connection config + `{ schema, table, column, value, primaryKey }` |
 | `/api/connections` | GET | list saved connections |
 | `/api/connections` | POST | `{ name, ...config }` |

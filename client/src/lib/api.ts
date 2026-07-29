@@ -39,11 +39,14 @@ export type BrowseColumn = {
   nullable: boolean;
 };
 
-export type BrowseTable = {
+export type BrowseTableMeta = {
   schema: string;
   name: string;
   columns: BrowseColumn[];
   primaryKey: string[];
+};
+
+export type BrowseTable = BrowseTableMeta & {
   rows: Record<string, unknown>[];
   rowCount: number;
   totalRows: number;
@@ -52,7 +55,18 @@ export type BrowseTable = {
 
 export type BrowseSuccess = {
   ok: true;
-  tables: BrowseTable[];
+  tables: BrowseTableMeta[];
+  durationMs: number;
+};
+
+export type TableRowsSuccess = {
+  ok: true;
+  schema: string;
+  name: string;
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  totalRows: number;
+  truncated: boolean;
   limit: number;
   durationMs: number;
 };
@@ -114,12 +128,17 @@ export async function runQuery(
 
 export async function browseTables(
   config: ConnectionConfig,
-  limit?: number,
 ): Promise<BrowseSuccess | ApiError> {
-  return postJson("/api/browse", {
-    ...config,
-    ...(limit !== undefined ? { limit } : {}),
-  });
+  return postJson("/api/browse", config);
+}
+
+export async function fetchTableRows(
+  config: ConnectionConfig,
+  schema: string,
+  table: string,
+  limit = 100,
+): Promise<TableRowsSuccess | ApiError> {
+  return postJson("/api/table-rows", { ...config, schema, table, limit });
 }
 
 export async function updateTableCell(

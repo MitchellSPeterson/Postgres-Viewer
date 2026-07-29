@@ -1,6 +1,7 @@
 import {
-  browseTarget,
+  fetchTableRows,
   formatError,
+  listTablesMeta,
   runTargetQuery,
   testTarget,
   updateCell,
@@ -16,8 +17,8 @@ import {
 } from "./store";
 
 const PORT = Number(process.env.PORT) || 3001;
-const DEFAULT_BROWSE_LIMIT = 500;
-const MAX_BROWSE_LIMIT = 5000;
+const DEFAULT_BROWSE_LIMIT = 100;
+const MAX_BROWSE_LIMIT = 2000;
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -181,7 +182,38 @@ Bun.serve({
         return json({ ok: false, error: "Invalid request body" }, 400);
       }
 
-      const { limit: rawLimit, savedId, ...rest } = body as Record<string, unknown>;
+      const { savedId, ...rest } = body as Record<string, unknown>;
+      const config = extractConfig(rest);
+      if (!config) {
+        return json({ ok: false, error: "Missing or invalid connection fields" }, 400);
+      }
+
+      try {
+        const result = await listTablesMeta(config);
+        if (typeof savedId === "number") touchSavedConnection(savedId);
+        return json({ ok: true, ...result });
+      } catch (err) {
+        return json({ ok: false, error: formatError(err, "Browse failed") }, 400);
+      }
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/table-rows") {
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return json({ ok: false, error: "Invalid JSON body" }, 400);
+      }
+
+      if (!body || typeof body !== "object") {
+        return json({ ok: false, error: "Invalid request body" }, 400);
+      }
+
+      const { schema, table, limit: rawLimit, ...rest } = body as Record<string, unknown>;
+      if (typeof schema !== "string" || typeof table !== "string") {
+        return json({ ok: false, error: "schema and table are required" }, 400);
+      }
+
       const config = extractConfig(rest);
       if (!config) {
         return json({ ok: false, error: "Missing or invalid connection fields" }, 400);
@@ -191,11 +223,10 @@ Bun.serve({
       if (limitOrError instanceof Response) return limitOrError;
 
       try {
-        const result = await browseTarget(config, limitOrError);
-        if (typeof savedId === "number") touchSavedConnection(savedId);
+        const result = await fetchTableRows(config, schema, table, limitOrError);
         return json({ ok: true, ...result });
       } catch (err) {
-        return json({ ok: false, error: formatError(err, "Browse failed") }, 400);
+        return json({ ok: false, error: formatError(err, "Failed to load table rows") }, 400);
       }
     }
 

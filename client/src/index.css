@@ -32,3 +32,10 @@ body {
     radial-gradient(900px 500px at 100% 0%, #e8f2ef 0%, transparent 50%),
     var(--color-surface);
 }
+
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+[role="menuitem"],
+summary {
+  cursor: pointer;
+}
