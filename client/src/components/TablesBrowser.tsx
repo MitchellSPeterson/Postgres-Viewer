@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CellValue, formatCellTitle } from "@/components/CellValue";
-import { browseTables, type BrowseTable, type ConnectionConfig } from "@/lib/api";
+import { browseTables, connectionKey, type BrowseTable, type ConnectionConfig } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -28,7 +28,7 @@ export function TablesBrowser({ config, active }: Props) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [hiddenColumns, setHiddenColumns] = useState<Record<string, Set<string>>>({});
 
-  const connectionKey = `${config.host}:${config.port}/${config.database}@${config.username}`;
+  const key = connectionKey(config);
 
   const load = async () => {
     setLoading(true);
@@ -68,7 +68,7 @@ export function TablesBrowser({ config, active }: Props) {
     if (!active) return;
     void load();
     // Reload whenever browse opens or connection identity changes
-  }, [active, connectionKey]);
+  }, [active, key]);
 
   const allExpanded =
     tables.length > 0 && tables.every((t) => expanded[tableKey(t)]);
