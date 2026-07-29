@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+.turbo
+.vite
+client/dist/
+server/node_modules/
+client/node_modules/
+bun.lockb
