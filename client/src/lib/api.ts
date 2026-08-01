@@ -7,6 +7,8 @@ export type PostgresConfig = {
   database: string;
   username: string;
   password: string;
+  /** Enable TLS (required for most AWS RDS instances). */
+  ssl?: boolean;
 };
 
 export type SqliteConfig = {
@@ -108,6 +110,7 @@ export const DEFAULT_POSTGRES: PostgresConfig = {
   database: "postgres",
   username: "postgres",
   password: "",
+  ssl: false,
 };
 
 export const DEFAULT_SQLITE: SqliteConfig = {
