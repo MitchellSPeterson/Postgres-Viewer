@@ -61,8 +61,10 @@ bun run dev:client   # http://localhost:5173
 | `/api/connections/:id` | DELETE | delete saved connection |
 | `/api/health` | GET | — |
 
-Postgres config: `{ engine:"postgres", host, port, database, username, password }`  
+Postgres config: `{ engine:"postgres", host, port, database, username, password, ssl? }`  
 SQLite config: `{ engine:"sqlite", path }`
+
+For **AWS RDS**, use the RDS endpoint as host, enable **Use SSL** in the connection form (or pass `"ssl": true`), and ensure your machine can reach the instance (security group / VPN).
 
 ## Security note
 

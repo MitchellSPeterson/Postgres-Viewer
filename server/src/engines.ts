@@ -69,6 +69,8 @@ function createPostgres(config: PostgresConfig) {
     database: config.database,
     username: config.username,
     password: config.password,
+    // ponytail: 'require' covers AWS RDS without bundling the RDS CA bundle
+    ssl: config.ssl ? "require" : false,
     max: 1,
     idle_timeout: 5,
     connect_timeout: 10,

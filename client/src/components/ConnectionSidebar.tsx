@@ -309,6 +309,23 @@ function PostgresFields({
           autoComplete="current-password"
         />
       </Field>
+      <div className="flex items-start gap-2">
+        <input
+          id="ssl"
+          type="checkbox"
+          checked={config.ssl === true}
+          onChange={(e) => onChange({ ...config, ssl: e.target.checked })}
+          className="mt-0.5 size-4 cursor-pointer rounded border-line accent-accent"
+        />
+        <div className="space-y-0.5">
+          <Label htmlFor="ssl" className="cursor-pointer font-normal">
+            Use SSL
+          </Label>
+          <p className="text-[11px] leading-snug text-muted">
+            Required for most AWS RDS and other remote Postgres hosts.
+          </p>
+        </div>
+      </div>
     </>
   );
 }

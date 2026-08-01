@@ -11,6 +11,8 @@ export type PostgresConfig = {
   database: string;
   username: string;
   password: string;
+  /** Enable TLS (required for most AWS RDS instances). */
+  ssl?: boolean;
 };
 
 export type SqliteConfig = {
@@ -375,7 +377,8 @@ export function isPostgresConfig(value: unknown): value is PostgresConfig {
     Number.isFinite(c.port) &&
     typeof c.database === "string" &&
     typeof c.username === "string" &&
-    typeof c.password === "string"
+    typeof c.password === "string" &&
+    (c.ssl === undefined || typeof c.ssl === "boolean")
   );
 }
 

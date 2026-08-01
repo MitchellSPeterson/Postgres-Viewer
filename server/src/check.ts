@@ -25,6 +25,14 @@ const goodSqlite = {
 };
 
 console.assert(isPostgresConfig(goodPg) === true, "valid pg rejected");
+console.assert(
+  isPostgresConfig({ ...goodPg, ssl: true }) === true,
+  "pg with ssl rejected",
+);
+console.assert(
+  isPostgresConfig({ ...goodPg, ssl: "true" }) === false,
+  "string ssl accepted",
+);
 console.assert(isSqliteConfig(goodSqlite) === true, "valid sqlite rejected");
 console.assert(isConnectionConfig(goodPg) === true, "pg union rejected");
 console.assert(isConnectionConfig(goodSqlite) === true, "sqlite union rejected");
